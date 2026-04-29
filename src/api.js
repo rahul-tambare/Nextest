@@ -51,6 +51,7 @@ const api = {
   // Endpoints (template.yaml)
   parseEndpoints: (yamlContent) => request('/endpoints/parse', { method: 'POST', body: JSON.stringify({ yaml: yamlContent }) }),
   scanEndpointsDir: (repoPath) => request('/endpoints/scan-dir', { method: 'POST', body: JSON.stringify({ repo_path: repoPath }) }),
+  listDirs: (dirPath) => request('/endpoints/list-dirs', { method: 'POST', body: JSON.stringify({ dir_path: dirPath }) }),
   parseEndpointFiles: (files) => request('/endpoints/parse-files', { method: 'POST', body: JSON.stringify({ files }) }),
   getEndpoints: () => request('/endpoints'),
   clearEndpoints: () => request('/endpoints', { method: 'DELETE' }),

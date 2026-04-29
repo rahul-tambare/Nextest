@@ -147,6 +147,26 @@ router.post('/scan-dir', async (req, res) => {
   }
 });
 
+// List subdirectories for a given base path
+router.post('/list-dirs', async (req, res) => {
+  try {
+    const { dir_path } = req.body;
+    if (!dir_path || !fs.existsSync(dir_path)) {
+      return res.status(400).json({ error: 'Invalid or missing dir_path' });
+    }
+    const dirs = [];
+    const files = fs.readdirSync(dir_path, { withFileTypes: true });
+    for (const file of files) {
+      if (file.isDirectory() && !file.name.startsWith('.')) {
+        dirs.push(file.name);
+      }
+    }
+    res.json({ dirs });
+  } catch (err) {
+    res.status(500).json({ error: `Directory list error: ${err.message}` });
+  }
+});
+
 // Parse specific array of yaml files
 router.post('/parse-files', async (req, res) => {
   try {

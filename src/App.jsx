@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { HashRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom';
+import ErrorBoundary from './components/ErrorBoundary.jsx';
 import { StoreProvider, useStore } from './store.jsx';
 import { ToastProvider } from './components/ToastProvider.jsx';
 import api from './api.js';
@@ -157,12 +158,14 @@ function AppShell() {
 
 export default function App() {
   return (
-    <StoreProvider>
-      <ToastProvider>
-        <HashRouter>
-          <AppShell />
-        </HashRouter>
-      </ToastProvider>
-    </StoreProvider>
+    <ErrorBoundary>
+      <StoreProvider>
+        <ToastProvider>
+          <HashRouter>
+            <AppShell />
+          </HashRouter>
+        </ToastProvider>
+      </StoreProvider>
+    </ErrorBoundary>
   );
 }
