@@ -1,0 +1,15 @@
+.pe-header-card { margin-bottom: var(--space-6); }
+
+.pe-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(600px, 1fr));
+  gap: var(--space-6);
+}
+@media (max-width: 800px) { .pe-grid { grid-template-columns: 1fr; } }
+
+.pe-console {
+  max-height: none;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

@@ -1,0 +1,8 @@
+.em-input-card { margin-bottom: var(--space-6); }
+
+.em-yaml-input {
+  min-height: 200px;
+  font-size: var(--text-xs) !important;
+  line-height: 1.6;
+  tab-size: 2;
+}

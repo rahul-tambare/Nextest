@@ -1,0 +1,15 @@
+{
+  "name": "nextest-cli",
+  "version": "1.0.0",
+  "description": "Nextest CI/CD execution client",
+  "main": "index.js",
+  "bin": {
+    "nextest": "./index.js"
+  },
+  "type": "module",
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^12.0.0",
+    "node-fetch": "^3.3.2"
+  }
+}
