@@ -7,7 +7,7 @@ import { stagingQuery } from '../db.js';
 const router = Router();
 
 // Helper to recursively read files with basic filtering
-function readRepoFiles(dir, maxDepth = 2, currentDepth = 0) {
+function readRepoFiles(dir, maxDepth = 4, currentDepth = 0) {
   let results = '';
   if (currentDepth > maxDepth) return results;
   
@@ -18,10 +18,13 @@ function readRepoFiles(dir, maxDepth = 2, currentDepth = 0) {
       const stat = fs.statSync(fullPath);
       
       if (stat && stat.isDirectory()) {
-        if (!['node_modules', '.git', 'dist', 'build'].includes(file)) {
+        if (!['node_modules', '.git', 'dist', 'build', 'coverage', 'docs'].includes(file)) {
           results += readRepoFiles(fullPath, maxDepth, currentDepth + 1);
         }
       } else {
+        // Ignore test files to save context space
+        if (file.includes('.test.') || file.includes('.spec.')) continue;
+        
         if (['.js', '.ts', '.json', '.yaml', '.yml'].includes(path.extname(file))) {
           // Limit file read to avoid massive prompt sizes
           const content = fs.readFileSync(fullPath, 'utf8').substring(0, 15000); 
@@ -37,7 +40,7 @@ function readRepoFiles(dir, maxDepth = 2, currentDepth = 0) {
 
 router.post('/generate', async (req, res) => {
   try {
-    const { method, endpoint, repo_path } = req.body;
+    const { method, endpoint, repo_path, test_cases } = req.body;
     
     if (!process.env.GEMINI_API_KEY) {
       return res.status(400).json({ error: 'GEMINI_API_KEY is not set in .env' });
@@ -75,7 +78,9 @@ router.post('/generate', async (req, res) => {
       }
     }
     
-    const prompt = `
+    let prompt;
+    if (test_cases && test_cases.trim() !== '') {
+      prompt = `
 You are a Senior QA Automation Engineer.
 We need to test the API endpoint: ${method} ${endpoint}
 
@@ -83,8 +88,44 @@ Here is the source code context from the local repository handling this endpoint
 ${codeContext}
 ${dbContext}
 
-Analyze the code and determine:
-1. What is the expected request body (JSON)? Make it a realistic, valid payload for a successful request.
+The user has requested the following test cases to be generated:
+${test_cases}
+
+Analyze the code and the requested test cases. Generate a payload for EACH requested test case.
+CRITICAL VALIDATION INSTRUCTION: Look very carefully for any validation schemas (Joi, Yup, Zod, express-validator, etc.) in the provided code context. 
+If a schema exists for this endpoint, you MUST include ALL required fields in your request_body (e.g. nested objects like "pagination": {"fetchLimit": 10}). Failure to include required schema fields will result in 400 Bad Request errors.
+
+For each test case, determine:
+1. What is the expected request body (JSON)? Ensure all schema constraints and required fields are satisfied.
+2. What is the expected HTTP success/error status code?
+3. A short, descriptive story name.
+4. Appropriate tags.
+
+Respond ONLY with a valid JSON ARRAY of objects matching this exact schema:
+[
+  {
+    "name": "Story Name",
+    "expected_status": 200,
+    "request_body": { ... },
+    "tags": ["tag1", "tag2"]
+  }
+]
+Do not wrap in markdown \`\`\`json block. Just pure JSON.
+`;
+    } else {
+      prompt = `
+You are a Senior QA Automation Engineer.
+We need to test the API endpoint: ${method} ${endpoint}
+
+Here is the source code context from the local repository handling this endpoint:
+${codeContext}
+${dbContext}
+
+Analyze the code and determine a default, successful test case:
+CRITICAL VALIDATION INSTRUCTION: Look very carefully for any validation schemas (Joi, Yup, Zod, express-validator, etc.) in the provided code context. 
+If a schema exists for this endpoint, you MUST include ALL required fields in your request_body (e.g. nested objects like "pagination": {"fetchLimit": 10}). Failure to include required schema fields will result in 400 Bad Request errors.
+
+1. What is the expected request body (JSON)? Make it a realistic, valid payload that completely satisfies all schema requirements for a successful request.
 2. What is the expected HTTP success status code?
 3. A short, descriptive story name.
 4. Appropriate tags.
@@ -98,6 +139,7 @@ Respond ONLY with a valid JSON object matching this exact schema:
 }
 Do not wrap in markdown \`\`\`json block. Just pure JSON.
 `;
+    }
 
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',

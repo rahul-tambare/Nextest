@@ -9,10 +9,17 @@ function buildCurlForStory(story) {
   const baseUrl = localStorage.getItem('nextest_staging_base_url') || '';
   const url = `${baseUrl}${story.endpoint}`;
   let extraHeaders = {};
-  try { extraHeaders = JSON.parse(story.request_headers || '{}'); } catch {}
+  if (typeof story.request_headers === 'string') {
+    try { extraHeaders = JSON.parse(story.request_headers || '{}'); } catch {}
+  } else if (story.request_headers && typeof story.request_headers === 'object') {
+    extraHeaders = { ...story.request_headers };
+  }
   delete extraHeaders['Content-Type'];
   delete extraHeaders['Authorization'];
-  let curl = `curl -X ${story.method} \\\n  '${url}' \\\n  -H 'Authorization: Bearer <STAGING_TOKEN>' \\\n  -H 'Content-Type: application/json'`;
+  
+  const token = sessionStorage.getItem('nextest_auth_token') || '<STAGING_TOKEN>';
+  
+  let curl = `curl -X ${story.method} \\\n  '${url}' \\\n  -H 'Authorization: Bearer ${token}' \\\n  -H 'Content-Type: application/json'`;
   for (const [k, v] of Object.entries(extraHeaders)) {
     curl += ` \\\n  -H '${k}: ${v}'`;
   }
@@ -33,6 +40,7 @@ const DEFAULT_STORY = {
   request_headers: '{}',
   tags: '[]',
   verification_endpoint: '',
+  test_cases: '',
 };
 
 export default function StoryEditor() {
@@ -164,18 +172,50 @@ export default function StoryEditor() {
       const result = await api.generateAIContext({
         method: formData.method,
         endpoint: formData.endpoint,
-        repo_path: p
+        repo_path: p,
+        test_cases: formData.test_cases
       });
       
+      let firstResult = result;
+      let additionalResults = [];
+      
+      if (Array.isArray(result)) {
+        if (result.length > 0) {
+          firstResult = result[0];
+          additionalResults = result.slice(1);
+        } else {
+          toast.error("AI returned an empty list of test cases.");
+          return;
+        }
+      }
+
       setFormData(prev => ({
         ...prev,
-        name: result.name || prev.name,
-        expected_status: result.expected_status || prev.expected_status,
-        request_body: result.request_body ? JSON.stringify(result.request_body, null, 2) : prev.request_body,
-        tags: result.tags ? JSON.stringify(result.tags, null, 2) : prev.tags
+        name: firstResult.name || prev.name,
+        expected_status: firstResult.expected_status || prev.expected_status,
+        request_body: firstResult.request_body ? JSON.stringify(firstResult.request_body, null, 2) : prev.request_body,
+        tags: firstResult.tags ? JSON.stringify(firstResult.tags, null, 2) : prev.tags
       }));
-      
-      toast.success('AI successfully generated the payload & metadata!');
+
+      if (additionalResults.length > 0) {
+        let headers = null;
+        try { headers = formData.request_headers ? JSON.parse(formData.request_headers) : null; } catch {}
+        
+        for (const item of additionalResults) {
+          await api.createStory({
+            ...formData,
+            name: item.name,
+            expected_status: parseInt(item.expected_status, 10) || 200,
+            request_body: item.request_body,
+            request_headers: headers,
+            tags: item.tags || []
+          });
+        }
+        loadData();
+        toast.success(`AI generated payload & automatically saved ${additionalResults.length} additional test cases!`);
+      } else {
+        toast.success('AI successfully generated the payload & metadata!');
+      }
     } catch (err) {
       toast.error(`AI Generation failed: ${err.message}`);
     } finally {
@@ -283,7 +323,21 @@ export default function StoryEditor() {
                     {generatingAI ? <><span className="spinner" /> Analyzing code...</> : '✨ Generate Payload'}
                   </button>
                 </div>
-                <p style={{ fontSize: '10px', color: 'var(--text-tertiary)', marginTop: 'var(--space-1)' }}>
+                
+                <div className="form-group" style={{ marginTop: 'var(--space-2)' }}>
+                  <label className="form-label" style={{ fontSize: '11px', opacity: 0.8 }}>Test Cases (Optional)</label>
+                  <textarea 
+                    className="textarea" 
+                    rows={2} 
+                    name="test_cases" 
+                    value={formData.test_cases || ''} 
+                    onChange={handleChange} 
+                    placeholder="e.g. 1. Valid user 2. Missing email 3. Invalid password. If provided, AI will generate multiple stories." 
+                    style={{ fontSize: '12px' }}
+                  />
+                </div>
+
+                <p style={{ fontSize: '10px', color: 'var(--text-tertiary)', marginTop: 'var(--space-2)' }}>
                   This tool will recursively read your local handlers using the <strong>Global Repository Path</strong> from your Dashboard, and analyze your DB schema to automatically write the request payload. Ensure GEMINI_API_KEY is configured in your .env file.
                 </p>
               </div>

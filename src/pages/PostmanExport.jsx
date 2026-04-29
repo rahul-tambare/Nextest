@@ -28,7 +28,9 @@ export default function PostmanExport() {
 
     if (story.request_headers) {
       try {
-        const headers = JSON.parse(story.request_headers);
+        const headers = typeof story.request_headers === 'string' 
+          ? JSON.parse(story.request_headers) 
+          : story.request_headers;
         for (const [k, v] of Object.entries(headers)) {
           curl += ` \\\n  -H '${k}: ${v}'`;
         }
