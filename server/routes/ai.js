@@ -40,7 +40,7 @@ function readRepoFiles(dir, maxDepth = 4, currentDepth = 0) {
 
 router.post('/generate', async (req, res) => {
   try {
-    const { method, endpoint, repo_path, test_cases } = req.body;
+    const { method, endpoint, repo_path, test_cases, model } = req.body;
     
     if (!process.env.GEMINI_API_KEY) {
       return res.status(400).json({ error: 'GEMINI_API_KEY is not set in .env' });
@@ -141,17 +141,80 @@ Do not wrap in markdown \`\`\`json block. Just pure JSON.
 `;
     }
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: {
-        temperature: 0.2,
-      }
-    });
+    const aiModel = model || 'gemini-2.5-flash';
+    let resultText = '';
 
-    // @google/genai v1.x: response.text is a string property, not a method
-    const rawText = (typeof response.text === 'function' ? response.text() : response.text) || '';
-    const text = rawText.trim().replace(/^```json/, '').replace(/```$/, '').trim();
+    if (aiModel.startsWith('gemini')) {
+      if (!process.env.GEMINI_API_KEY) return res.status(400).json({ error: 'GEMINI_API_KEY is not set in .env' });
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const response = await ai.models.generateContent({
+        model: aiModel,
+        contents: prompt,
+        config: { temperature: 0.2 }
+      });
+      resultText = (typeof response.text === 'function' ? response.text() : response.text) || '';
+      
+    } else if (aiModel.startsWith('claude')) {
+      if (!process.env.ANTHROPIC_API_KEY) return res.status(400).json({ error: 'ANTHROPIC_API_KEY is not set in .env' });
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: aiModel,
+          max_tokens: 4000,
+          temperature: 0.2,
+          messages: [{ role: 'user', content: prompt }]
+        })
+      });
+      if (!resp.ok) throw new Error(`Claude API error: ${await resp.text()}`);
+      const data = await resp.json();
+      resultText = data.content[0].text;
+      
+    } else if (aiModel.startsWith('deepseek')) {
+      if (!process.env.DEEPSEEK_API_KEY) return res.status(400).json({ error: 'DEEPSEEK_API_KEY is not set in .env' });
+      const resp = await fetch('https://api.deepseek.com/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: aiModel,
+          temperature: 0.2,
+          messages: [{ role: 'user', content: prompt }]
+        })
+      });
+      if (!resp.ok) throw new Error(`Deepseek API error: ${await resp.text()}`);
+      const data = await resp.json();
+      resultText = data.choices[0].message.content;
+      
+    } else if (aiModel.startsWith('gpt-')) {
+      if (!process.env.OPENAI_API_KEY) return res.status(400).json({ error: 'OPENAI_API_KEY is not set in .env' });
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: aiModel,
+          temperature: 0.2,
+          messages: [{ role: 'user', content: prompt }]
+        })
+      });
+      if (!resp.ok) throw new Error(`OpenAI API error: ${await resp.text()}`);
+      const data = await resp.json();
+      resultText = data.choices[0].message.content;
+      
+    } else {
+      return res.status(400).json({ error: 'Unsupported model selected: ' + aiModel });
+    }
+
+    const text = resultText.trim().replace(/^```(?:json)?/, '').replace(/```$/, '').trim();
     const result = JSON.parse(text);
 
     res.json(result);

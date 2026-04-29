@@ -53,6 +53,7 @@ export default function StoryEditor() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [generatingAI, setGeneratingAI] = useState(false);
+  const [aiModel, setAiModel] = useState(localStorage.getItem('nextest_ai_model') || 'gemini-2.5-flash');
 
   useEffect(() => {
     loadData();
@@ -173,7 +174,8 @@ export default function StoryEditor() {
         method: formData.method,
         endpoint: formData.endpoint,
         repo_path: p,
-        test_cases: formData.test_cases
+        test_cases: formData.test_cases,
+        model: aiModel
       });
       
       let firstResult = result;
@@ -319,9 +321,31 @@ export default function StoryEditor() {
               <div className="form-group" style={{ gridColumn: '1 / -1', background: 'rgba(129, 140, 248, 0.05)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(129, 140, 248, 0.2)' }}>
                 <div className="flex items-center justify-between" style={{ marginBottom: 'var(--space-2)' }}>
                   <label className="form-label" style={{ margin: 0, color: 'var(--accent-solid)' }}>✨ AI Auto-Generate</label>
-                  <button className="btn btn-secondary btn-sm" onClick={handleAIGenerate} disabled={generatingAI}>
-                    {generatingAI ? <><span className="spinner" /> Analyzing code...</> : '✨ Generate Payload'}
-                  </button>
+                  <div className="flex gap-2">
+                    <select 
+                      className="select select-sm" 
+                      value={aiModel} 
+                      onChange={e => {
+                        setAiModel(e.target.value);
+                        localStorage.setItem('nextest_ai_model', e.target.value);
+                      }} 
+                      style={{ width: 'auto', fontSize: '12px', padding: '0 8px', height: '28px' }}
+                    >
+                      <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
+                      <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+                      <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+                      <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+                      <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
+                      <option value="claude-3-5-haiku-20241022">Claude 3.5 Haiku</option>
+                      <option value="deepseek-chat">Deepseek V3</option>
+                      <option value="deepseek-reasoner">Deepseek R1</option>
+                      <option value="gpt-4o">GPT-4o</option>
+                      <option value="gpt-4o-mini">GPT-4o Mini</option>
+                    </select>
+                    <button className="btn btn-secondary btn-sm" onClick={handleAIGenerate} disabled={generatingAI}>
+                      {generatingAI ? <><span className="spinner" /> Analyzing code...</> : '✨ Generate Payload'}
+                    </button>
+                  </div>
                 </div>
                 
                 <div className="form-group" style={{ marginTop: 'var(--space-2)' }}>
