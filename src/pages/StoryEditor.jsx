@@ -3,6 +3,26 @@ import { useToast } from '../components/ToastProvider.jsx';
 import api from '../api.js';
 import './StoryEditor.css';
 
+const methodColors = { GET: 'method-GET', POST: 'method-POST', PUT: 'method-PUT', PATCH: 'method-PATCH', DELETE: 'method-DELETE' };
+
+function buildCurlForStory(story) {
+  const baseUrl = localStorage.getItem('nextest_staging_base_url') || '';
+  const url = `${baseUrl}${story.endpoint}`;
+  let extraHeaders = {};
+  try { extraHeaders = JSON.parse(story.request_headers || '{}'); } catch {}
+  delete extraHeaders['Content-Type'];
+  delete extraHeaders['Authorization'];
+  let curl = `curl -X ${story.method} \\\n  '${url}' \\\n  -H 'Authorization: Bearer <STAGING_TOKEN>' \\\n  -H 'Content-Type: application/json'`;
+  for (const [k, v] of Object.entries(extraHeaders)) {
+    curl += ` \\\n  -H '${k}: ${v}'`;
+  }
+  if (story.request_body && ['POST', 'PUT', 'PATCH'].includes(story.method)) {
+    const body = typeof story.request_body === 'string' ? story.request_body : JSON.stringify(story.request_body, null, 2);
+    curl += ` \\\n  -d '${body}'`;
+  }
+  return curl;
+}
+
 const DEFAULT_STORY = {
   name: '',
   description: '',
@@ -163,7 +183,7 @@ export default function StoryEditor() {
     }
   };
 
-  const methodColors = { GET: 'method-GET', POST: 'method-POST', PUT: 'method-PUT', PATCH: 'method-PATCH', DELETE: 'method-DELETE' };
+
 
   return (
     <div className="story-editor animate-fade-in">
@@ -185,6 +205,10 @@ export default function StoryEditor() {
                     <span className="se-story-name truncate">{story.name}</span>
                   </div>
                   <div className="flex gap-2">
+                    <button className="btn btn-ghost btn-icon" title="Copy curl" onClick={() => {
+                      const curl = buildCurlForStory(story);
+                      navigator.clipboard.writeText(curl).then(() => toast.success('curl copied to clipboard!'));
+                    }}>📋</button>
                     <button className="btn btn-ghost btn-icon" onClick={() => handleEdit(story)}>✏️</button>
                     <button className="btn btn-ghost btn-icon" onClick={() => handleDelete(story.id)} style={{ color: 'var(--color-error)' }}>🗑️</button>
                   </div>

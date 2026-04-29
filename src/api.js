@@ -50,8 +50,10 @@ const api = {
 
   // Endpoints (template.yaml)
   parseEndpoints: (yamlContent) => request('/endpoints/parse', { method: 'POST', body: JSON.stringify({ yaml: yamlContent }) }),
-  parseEndpointsDir: (repoPath) => request('/endpoints/parse-dir', { method: 'POST', body: JSON.stringify({ repo_path: repoPath }) }),
+  scanEndpointsDir: (repoPath) => request('/endpoints/scan-dir', { method: 'POST', body: JSON.stringify({ repo_path: repoPath }) }),
+  parseEndpointFiles: (files) => request('/endpoints/parse-files', { method: 'POST', body: JSON.stringify({ files }) }),
   getEndpoints: () => request('/endpoints'),
+  clearEndpoints: () => request('/endpoints', { method: 'DELETE' }),
 
   // Schema introspection
   getSchemaTables: () => request('/schema/tables'),

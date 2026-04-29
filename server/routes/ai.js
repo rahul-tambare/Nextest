@@ -107,11 +107,14 @@ Do not wrap in markdown \`\`\`json block. Just pure JSON.
       }
     });
 
-    const text = response.text().trim().replace(/^```json/, '').replace(/```$/, '').trim();
+    // @google/genai v1.x: response.text is a string property, not a method
+    const rawText = (typeof response.text === 'function' ? response.text() : response.text) || '';
+    const text = rawText.trim().replace(/^```json/, '').replace(/```$/, '').trim();
     const result = JSON.parse(text);
 
     res.json(result);
   } catch (err) {
+    console.error('AI generation error:', err);
     res.status(500).json({ error: `AI Generation failed: ${err.message}` });
   }
 });

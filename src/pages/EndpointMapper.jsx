@@ -91,6 +91,8 @@ export default function EndpointMapper() {
   const [endpoints, setEndpoints] = useState([]);
   const [parsing, setParsing] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [scannedFiles, setScannedFiles] = useState([]);
+  const [selectedFiles, setSelectedFiles] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -133,14 +135,53 @@ export default function EndpointMapper() {
       return;
     }
     setScanning(true);
+    setScannedFiles([]);
+    setSelectedFiles([]);
     try {
-      const result = await api.parseEndpointsDir(p);
-      toast.success(`Scanned ${result.files_scanned} files, parsed ${result.parsed} endpoints`);
-      setEndpoints(result.endpoints);
+      const result = await api.scanEndpointsDir(p);
+      if (result.files.length === 0) {
+        toast.info('No template.yaml files found');
+      } else {
+        toast.success(`Found ${result.files.length} files`);
+        setScannedFiles(result.files);
+        setSelectedFiles(result.files); // select all by default
+      }
     } catch (err) {
       toast.error(`Scan failed: ${err.message}`);
     } finally {
       setScanning(false);
+    }
+  };
+
+  const toggleFile = (file) => {
+    setSelectedFiles(prev => 
+      prev.includes(file) ? prev.filter(f => f !== file) : [...prev, file]
+    );
+  };
+
+  const handleParseFiles = async () => {
+    if (selectedFiles.length === 0) return;
+    setParsing(true);
+    try {
+      const result = await api.parseEndpointFiles(selectedFiles);
+      toast.success(`Parsed ${result.parsed} endpoints from ${result.files_scanned} files`);
+      setEndpoints(result.endpoints);
+      setScannedFiles([]); // clear the list after parsing
+    } catch (err) {
+      toast.error(`Parse failed: ${err.message}`);
+    } finally {
+      setParsing(false);
+    }
+  };
+
+  const handleClearEndpoints = async () => {
+    if (!window.confirm('Are you sure you want to clear all discovered endpoints?')) return;
+    try {
+      await api.clearEndpoints();
+      setEndpoints([]);
+      toast.success('All endpoints cleared');
+    } catch (err) {
+      toast.error('Failed to clear endpoints');
     }
   };
 
@@ -165,12 +206,38 @@ export default function EndpointMapper() {
               This uses the Global Repository Path configured on your Dashboard.
             </p>
           </div>
-          <button className="btn btn-primary w-full" onClick={handleScanDir} disabled={scanning}>
-            {scanning ? <><span className="spinner" /> Scanning...</> : '🔍 Scan for template.yaml files'}
-          </button>
-          <p style={{ fontSize: '10px', color: 'var(--text-tertiary)', marginTop: 'var(--space-3)' }}>
-            Automatically searches all directories (up to 5 levels deep) for files named <code>template.yaml</code> and merges their endpoints into the database.
-          </p>
+          
+          {scannedFiles.length === 0 ? (
+            <>
+              <button className="btn btn-primary w-full" onClick={handleScanDir} disabled={scanning}>
+                {scanning ? <><span className="spinner" /> Scanning...</> : '🔍 Scan for template.yaml files'}
+              </button>
+              <p style={{ fontSize: '10px', color: 'var(--text-tertiary)', marginTop: 'var(--space-3)' }}>
+                Automatically searches all directories (up to 5 levels deep) for files named <code>template.yaml</code>.
+              </p>
+            </>
+          ) : (
+            <div className="animate-fade-in">
+              <div style={{ maxHeight: '150px', overflowY: 'auto', background: 'var(--bg-secondary)', padding: 'var(--space-2)', borderRadius: 'var(--radius-md)', marginBottom: 'var(--space-3)' }}>
+                {scannedFiles.map(file => (
+                  <label key={file} style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', padding: '4px', cursor: 'pointer' }}>
+                    <input 
+                      type="checkbox" 
+                      checked={selectedFiles.includes(file)} 
+                      onChange={() => toggleFile(file)}
+                    />
+                    <span style={{ wordBreak: 'break-all', fontFamily: 'monospace' }}>{file.split('/').slice(-3).join('/')}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <button className="btn btn-primary flex-1" onClick={handleParseFiles} disabled={parsing || selectedFiles.length === 0}>
+                  {parsing ? <><span className="spinner" /> Parsing...</> : `📄 Parse ${selectedFiles.length} Selected`}
+                </button>
+                <button className="btn btn-secondary" onClick={() => setScannedFiles([])}>Cancel</button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* YAML Input Card */}
@@ -198,9 +265,16 @@ export default function EndpointMapper() {
 
       {/* Endpoints Table */}
       <div className="card">
-        <div className="card-header">
-          <span className="card-title">Discovered Endpoints</span>
-          <span className="badge badge-neutral">{endpoints.length} found</span>
+        <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <span className="card-title">Discovered Endpoints</span>
+            <span className="badge badge-neutral" style={{ marginLeft: 'var(--space-2)' }}>{endpoints.length} found</span>
+          </div>
+          {endpoints.length > 0 && (
+            <button className="btn btn-ghost btn-sm" onClick={handleClearEndpoints} style={{ color: 'var(--danger-500)' }}>
+              🗑️ Clear All
+            </button>
+          )}
         </div>
         {endpoints.length > 0 ? (
           <div className="table-wrapper">
