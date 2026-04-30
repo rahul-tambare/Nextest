@@ -5,7 +5,7 @@ import './StoryEditor.css';
 
 const methodColors = { GET: 'method-GET', POST: 'method-POST', PUT: 'method-PUT', PATCH: 'method-PATCH', DELETE: 'method-DELETE' };
 
-function buildCurlForStory(story) {
+function buildCurlForStory(story, selectedRole = '') {
   const baseUrl = localStorage.getItem('nextest_staging_base_url') || '';
   const url = `${baseUrl}${story.endpoint}`;
   let extraHeaders = {};
@@ -17,9 +17,20 @@ function buildCurlForStory(story) {
   delete extraHeaders['Content-Type'];
   delete extraHeaders['Authorization'];
   
-  const token = sessionStorage.getItem('nextest_auth_token') || '<STAGING_TOKEN>';
+  let tokenToUse = sessionStorage.getItem('nextest_auth_token') || '<TOKEN>';
+  try {
+    const repoName = localStorage.getItem('nextest_repo_name') || '';
+    const allTokens = JSON.parse(localStorage.getItem('nextest_role_tokens') || '{}');
+    const repoTokens = allTokens[repoName] || {};
+    if (selectedRole && repoTokens[selectedRole]) {
+      tokenToUse = repoTokens[selectedRole];
+    } else {
+      const vals = Object.values(repoTokens).filter(v => v?.trim());
+      if (vals.length > 0) tokenToUse = vals[0];
+    }
+  } catch {}
   
-  let curl = `curl -X ${story.method} \\\n  '${url}' \\\n  -H 'Authorization: Bearer ${token}' \\\n  -H 'Content-Type: application/json'`;
+  let curl = `curl -X ${story.method} \\\n  '${url}' \\\n  -H 'Authorization: ${tokenToUse}' \\\n  -H 'Content-Type: application/json'`;
   for (const [k, v] of Object.entries(extraHeaders)) {
     curl += ` \\\n  -H '${k}: ${v}'`;
   }
@@ -62,6 +73,14 @@ export default function StoryEditor() {
   const [saving, setSaving] = useState(false);
   const [generatingAI, setGeneratingAI] = useState(false);
   const [aiModel, setAiModel] = useState(localStorage.getItem('nextest_ai_model') || 'gemini-2.5-flash');
+
+  // Inline Test State
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const [testRole, setTestRole] = useState('');
+  const [aiFixing, setAiFixing] = useState(false);
+  const [aiAnalysis, setAiAnalysis] = useState(null);
+  const [analyzing, setAnalyzing] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -260,6 +279,161 @@ export default function StoryEditor() {
   };
 
 
+
+  // ── Inline Test Request ──
+  const handleTestRequest = async () => {
+    const baseUrl = localStorage.getItem('nextest_staging_base_url') || '';
+    if (!baseUrl) {
+      toast.error('No Base Path URL configured. Set it on the Dashboard first.');
+      return;
+    }
+    if (!formData.endpoint) {
+      toast.error('Endpoint is required to test');
+      return;
+    }
+
+    // Resolve the token for the selected test role
+    let tokenToUse = sessionStorage.getItem('nextest_auth_token') || '';
+    if (testRole) {
+      try {
+        const repoName = localStorage.getItem('nextest_repo_name') || '';
+        const allTokens = JSON.parse(localStorage.getItem('nextest_role_tokens') || '{}');
+        const repoTokens = allTokens[repoName] || {};
+        if (repoTokens[testRole]) tokenToUse = repoTokens[testRole];
+      } catch {}
+    }
+
+    if (!tokenToUse) {
+      toast.error('No token available. Configure a role token on Dashboard or select a role.');
+      return;
+    }
+
+    let bodyObj = null;
+    let headersObj = {};
+    try {
+      if (formData.request_body && formData.request_body.trim() !== '{}') {
+        bodyObj = JSON.parse(formData.request_body);
+      }
+    } catch (err) {
+      toast.error(`Invalid Request Body JSON: ${err.message}`);
+      return;
+    }
+    try {
+      headersObj = formData.request_headers ? JSON.parse(formData.request_headers) : {};
+    } catch {}
+
+    setTesting(true);
+    setTestResult(null);
+
+    try {
+      const url = baseUrl.replace(/\/$/, '') + formData.endpoint;
+      const result = await api.proxyRequest({
+        method: formData.method,
+        url,
+        headers: headersObj,
+        body: bodyObj,
+        token: tokenToUse,
+      });
+      setTestResult({
+        status: result.proxyStatus,
+        body: result.proxyBody || result.data?.proxyBody,
+        time: result.proxyTime || result.data?.proxyTime,
+        ok: result.proxyStatus === parseInt(formData.expected_status, 10),
+      });
+      if (result.proxyStatus === parseInt(formData.expected_status, 10)) {
+        toast.success(`✅ Test passed — HTTP ${result.proxyStatus} (${result.proxyTime}ms)`);
+      } else {
+        toast.warning(`⚠ HTTP ${result.proxyStatus} (expected ${formData.expected_status})`);
+      }
+    } catch (err) {
+      setTestResult({ status: 'error', body: err.message, time: 0, ok: false });
+      toast.error(`Test failed: ${err.message}`);
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  // ── AI Fix Request Body ──
+  const handleAIFix = async () => {
+    if (!testResult || testResult.ok) return;
+    const p = localStorage.getItem('nextest_repo_path');
+    if (!p) {
+      toast.error('Configure Global Repository Path on the Dashboard first.');
+      return;
+    }
+
+    setAiFixing(true);
+    try {
+      const errorContext = typeof testResult.body === 'object' ? JSON.stringify(testResult.body, null, 2) : String(testResult.body);
+
+      const result = await api.generateAIContext({
+        method: formData.method,
+        endpoint: formData.endpoint,
+        repo_path: p,
+        model: aiModel,
+        test_cases: `The API returned HTTP ${testResult.status} with this error response:\n${errorContext}\n\nThe original request body was:\n${formData.request_body}\n\nPlease analyze the error and fix the request body to make a successful request. Return ONLY one corrected test case.`,
+      });
+
+      let fixed = result;
+      if (Array.isArray(result) && result.length > 0) fixed = result[0];
+
+      if (fixed.request_body) {
+        setFormData(prev => ({
+          ...prev,
+          request_body: JSON.stringify(fixed.request_body, null, 2),
+          name: fixed.name || prev.name,
+          expected_status: fixed.expected_status || prev.expected_status,
+        }));
+        toast.success('🤖 AI fixed the request body! Review the changes and test again.');
+      } else {
+        toast.warning('AI did not return a corrected request body');
+      }
+    } catch (err) {
+      toast.error(`AI Fix failed: ${err.message}`);
+    } finally {
+      setAiFixing(false);
+    }
+  };
+
+  // ── AI Analyze Why Failed ──
+  const handleWhyFailed = async () => {
+    if (!testResult) return;
+    const p = localStorage.getItem('nextest_repo_path');
+    if (!p) {
+      toast.error('Configure Global Repository Path on the Dashboard first.');
+      return;
+    }
+
+    setAnalyzing(true);
+    setAiAnalysis(null);
+    try {
+      const responseBody = typeof testResult.body === 'object' ? JSON.stringify(testResult.body, null, 2) : String(testResult.body);
+
+      const resp = await fetch('/api/ai/analyze-failure', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          method: formData.method,
+          endpoint: formData.endpoint,
+          repo_path: p,
+          model: aiModel,
+          request_body: formData.request_body,
+          request_headers: formData.request_headers,
+          response_status: testResult.status,
+          response_body: responseBody,
+          expected_status: formData.expected_status,
+        }),
+      });
+      const data = await resp.json();
+      if (data.error) throw new Error(data.error);
+      setAiAnalysis(data);
+      toast.success('Analysis complete!');
+    } catch (err) {
+      toast.error(`Analysis failed: ${err.message}`);
+    } finally {
+      setAnalyzing(false);
+    }
+  };
 
   return (
     <div className="story-editor animate-fade-in">
@@ -477,8 +651,149 @@ export default function StoryEditor() {
               </div>
 
               <div className="form-group" style={{ gridColumn: '1 / -1' }}>
-                <label className="form-label">Request Body (JSON)</label>
+                <div className="flex items-center justify-between">
+                  <label className="form-label">Request Body (JSON)</label>
+                </div>
                 <textarea className="textarea input-mono" rows={4} name="request_body" value={formData.request_body} onChange={handleChange} />
+              </div>
+
+              {/* ── Inline Test Runner ── */}
+              <div className="form-group" style={{ gridColumn: '1 / -1', background: 'rgba(52, 211, 153, 0.04)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(52, 211, 153, 0.15)' }}>
+                <div className="flex items-center justify-between" style={{ marginBottom: 'var(--space-2)' }}>
+                  <label className="form-label" style={{ margin: 0, color: '#34d399' }}>▶ Test Request</label>
+                  <div className="flex gap-2 items-center">
+                    <select
+                      className="select select-sm"
+                      value={testRole}
+                      onChange={e => setTestRole(e.target.value)}
+                      style={{ width: 'auto', fontSize: '11px', padding: '0 6px', height: '26px' }}
+                    >
+                      <option value="">Default Token</option>
+                      {getConfiguredRoles().map(r => (
+                        <option key={r.key} value={r.key}>{r.icon} {r.label}</option>
+                      ))}
+                    </select>
+                    <button
+                      className="btn btn-sm"
+                      onClick={handleTestRequest}
+                      disabled={testing || !formData.endpoint}
+                      style={{ background: 'rgba(52,211,153,0.15)', color: '#34d399', border: '1px solid rgba(52,211,153,0.3)', fontWeight: 600, fontSize: '11px' }}
+                    >
+                      {testing ? <><span className="spinner" /> Testing...</> : '▶ Run Test'}
+                    </button>
+                  </div>
+                </div>
+
+                {testResult && (
+                  <div style={{ marginTop: 'var(--space-3)' }} className="animate-slide-up">
+                    {/* Status Bar */}
+                    <div className="flex items-center justify-between" style={{ marginBottom: 'var(--space-2)' }}>
+                      <div className="flex items-center gap-2">
+                        <span className={`badge ${testResult.ok ? 'badge-success' : 'badge-error'}`} style={{ fontSize: '11px', padding: '3px 10px' }}>
+                          {testResult.status === 'error' ? '⚠ Error' : `HTTP ${testResult.status}`}
+                        </span>
+                        {testResult.time > 0 && (
+                          <span className="badge badge-neutral" style={{ fontSize: '10px' }}>{testResult.time}ms</span>
+                        )}
+                        {testResult.ok
+                          ? <span style={{ fontSize: '11px', color: '#34d399', fontWeight: 600 }}>✅ Matches expected {formData.expected_status}</span>
+                          : <span style={{ fontSize: '11px', color: '#f87171', fontWeight: 600 }}>❌ Expected {formData.expected_status}</span>
+                        }
+                      </div>
+                    </div>
+
+                    {/* Response Body */}
+                    <div style={{ marginBottom: 'var(--space-3)' }}>
+                      <label className="form-label" style={{ fontSize: '10px', marginBottom: '4px', color: 'var(--text-tertiary)' }}>Response Body</label>
+                      <pre className="console" style={{ maxHeight: '220px', fontSize: '10.5px', margin: 0 }}>
+                        <code>{typeof testResult.body === 'object' ? JSON.stringify(testResult.body, null, 2) : String(testResult.body || '')}</code>
+                      </pre>
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="flex gap-2 flex-wrap">
+                      {!testResult.ok && (
+                        <>
+                          <button
+                            className="btn btn-sm"
+                            onClick={handleWhyFailed}
+                            disabled={analyzing}
+                            style={{ background: 'rgba(251,191,36,0.12)', color: '#fbbf24', border: '1px solid rgba(251,191,36,0.3)', fontWeight: 600, fontSize: '11px' }}
+                          >
+                            {analyzing ? <><span className="spinner" /> Analyzing...</> : '🔍 Why Failed?'}
+                          </button>
+                          <button
+                            className="btn btn-sm"
+                            onClick={handleAIFix}
+                            disabled={aiFixing}
+                            style={{ background: 'rgba(129,140,248,0.12)', color: 'var(--accent-solid)', border: '1px solid rgba(129,140,248,0.3)', fontWeight: 600, fontSize: '11px' }}
+                          >
+                            {aiFixing ? <><span className="spinner" /> AI Fixing...</> : '🤖 AI Fix Payload'}
+                          </button>
+                        </>
+                      )}
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => {
+                          const curl = buildCurlForStory(formData, testRole);
+                          navigator.clipboard.writeText(curl).then(() => toast.success('cURL copied!'));
+                        }}
+                        style={{ fontSize: '11px' }}
+                      >
+                        📋 Copy cURL
+                      </button>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => {
+                          const body = typeof testResult.body === 'object' ? JSON.stringify(testResult.body, null, 2) : String(testResult.body || '');
+                          navigator.clipboard.writeText(body).then(() => toast.success('Response copied!'));
+                        }}
+                        style={{ fontSize: '11px' }}
+                      >
+                        📋 Copy Response
+                      </button>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => { setTestResult(null); setAiAnalysis(null); }}
+                        style={{ fontSize: '11px' }}
+                      >
+                        ✕ Clear
+                      </button>
+                    </div>
+
+                    {/* AI Analysis Result */}
+                    {aiAnalysis && (
+                      <div style={{ marginTop: 'var(--space-3)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', background: 'rgba(251,191,36,0.06)', border: '1px solid rgba(251,191,36,0.2)' }} className="animate-slide-up">
+                        <div className="flex items-center gap-2" style={{ marginBottom: 'var(--space-2)' }}>
+                          <span style={{ fontSize: '14px' }}>🔍</span>
+                          <span style={{ fontWeight: 700, fontSize: '12px', color: '#fbbf24' }}>Failure Analysis</span>
+                        </div>
+                        {aiAnalysis.rootCause && (
+                          <div style={{ marginBottom: 'var(--space-2)' }}>
+                            <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Root Cause</span>
+                            <p style={{ fontSize: '12px', color: 'var(--text-primary)', margin: '4px 0 0', lineHeight: 1.5 }}>{aiAnalysis.rootCause}</p>
+                          </div>
+                        )}
+                        {aiAnalysis.explanation && (
+                          <div style={{ marginBottom: 'var(--space-2)' }}>
+                            <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Explanation</span>
+                            <p style={{ fontSize: '12px', color: 'var(--text-primary)', margin: '4px 0 0', lineHeight: 1.5 }}>{aiAnalysis.explanation}</p>
+                          </div>
+                        )}
+                        {aiAnalysis.suggestedFix && (
+                          <div>
+                            <span style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Suggested Fix</span>
+                            <p style={{ fontSize: '12px', color: '#34d399', margin: '4px 0 0', lineHeight: 1.5, fontWeight: 500 }}>{aiAnalysis.suggestedFix}</p>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <p style={{ fontSize: '9px', color: 'var(--text-tertiary)', marginTop: 'var(--space-2)' }}>
+                  Executes the request against staging. If it fails: <strong>🔍 Why Failed?</strong> to understand the error, <strong>🤖 AI Fix</strong> to auto-correct the payload.
+                </p>
               </div>
 
               <div className="form-group" style={{ gridColumn: '1 / -1' }}>

@@ -270,4 +270,102 @@ Do not wrap in markdown \`\`\`json block. Just pure JSON.
   }
 });
 
+// ── Analyze Failure ──
+router.post('/analyze-failure', async (req, res) => {
+  try {
+    const { method, endpoint, repo_path, request_body, request_headers, response_status, response_body, expected_status, model } = req.body;
+    
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(400).json({ error: 'GEMINI_API_KEY is not set in .env' });
+    }
+    if (!repo_path || !fs.existsSync(repo_path)) {
+      return res.status(400).json({ error: 'Invalid or missing repo_path.' });
+    }
+
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    const localContext = await getLocalContext(repo_path, endpoint);
+    const aiModel = model || 'gemini-2.5-flash';
+
+    const prompt = `
+You are an expert Backend QA Engineer. A test just failed in the Nextest API platform.
+Analyze the API failure using the provided codebase context and the request details.
+
+CODE CONTEXT (Handlers and DB Schema for ${endpoint}):
+${localContext}
+
+TEST EXECUTION DETAILS:
+Method: ${method}
+Endpoint: ${endpoint}
+Request Headers: ${request_headers || '{}'}
+Request Body: ${request_body || '{}'}
+
+EXPECTED STATUS: ${expected_status}
+ACTUAL STATUS: ${response_status}
+
+ERROR RESPONSE BODY:
+${response_body}
+
+Analyze WHY the API returned this error response instead of the expected status.
+Look for mismatches between the Request Body/Headers and what the Code Context requires.
+
+Return ONLY a valid JSON object matching this schema exactly, with NO markdown formatting:
+{
+  "rootCause": "Short 1-sentence summary of the main issue",
+  "explanation": "Detailed explanation of why the API rejected the request based on the code context",
+  "suggestedFix": "Clear instructions on how to fix the Request Body or Headers to make it pass"
+}`;
+
+    let resultText = '';
+
+    if (aiModel.startsWith('gemini')) {
+      const gModel = ai.getGenerativeModel({ model: aiModel });
+      const response = await gModel.generateContent(prompt);
+      resultText = response.response.text();
+    } else if (aiModel.startsWith('claude')) {
+      if (!process.env.ANTHROPIC_API_KEY) return res.status(400).json({ error: 'ANTHROPIC_API_KEY is not set' });
+      const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+      const response = await claude.messages.create({
+        model: aiModel,
+        max_tokens: 2000,
+        messages: [{ role: 'user', content: prompt }]
+      });
+      resultText = response.content[0].text;
+    } else if (aiModel.startsWith('gpt')) {
+      if (!process.env.OPENAI_API_KEY) return res.status(400).json({ error: 'OPENAI_API_KEY is not set' });
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const response = await openai.chat.completions.create({
+        model: aiModel,
+        messages: [{ role: 'user', content: prompt }]
+      });
+      resultText = response.choices[0].message.content;
+    } else if (aiModel.startsWith('deepseek')) {
+      if (!process.env.DEEPSEEK_API_KEY) return res.status(400).json({ error: 'DEEPSEEK_API_KEY is not set' });
+      const deepseek = new OpenAI({ apiKey: process.env.DEEPSEEK_API_KEY, baseURL: 'https://api.deepseek.com' });
+      const response = await deepseek.chat.completions.create({
+        model: aiModel,
+        messages: [{ role: 'user', content: prompt }]
+      });
+      resultText = response.choices[0].message.content;
+    } else if (aiModel.startsWith('groq')) {
+      if (!process.env.GROQ_API_KEY) return res.status(400).json({ error: 'GROQ_API_KEY is not set' });
+      const groq = new OpenAI({ apiKey: process.env.GROQ_API_KEY, baseURL: 'https://api.groq.com/openai/v1' });
+      const response = await groq.chat.completions.create({
+        model: aiModel.replace('groq-', ''),
+        messages: [{ role: 'user', content: prompt }]
+      });
+      resultText = response.choices[0].message.content;
+    } else {
+      return res.status(400).json({ error: 'Unsupported model selected: ' + aiModel });
+    }
+
+    const text = resultText.trim().replace(/^```(?:json)?/, '').replace(/```$/, '').trim();
+    const result = JSON.parse(text);
+
+    res.json(result);
+  } catch (err) {
+    console.error('AI analysis error:', err);
+    res.status(500).json({ error: `AI Analysis failed: ${err.message}` });
+  }
+});
+
 export default router;
