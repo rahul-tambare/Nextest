@@ -34,7 +34,11 @@ const api = {
   getRuns: () => request('/runs'),
   getRun: (id) => request(`/runs/${id}`),
   createRun: (data) => request('/runs', { method: 'POST', body: JSON.stringify(data) }),
-  executeRun: (id) => request(`/runs/${id}/execute`, { method: 'POST' }),
+  executeRun: (id, payload) =>
+    request(`/runs/${id}/execute`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 
   // Results
   getResults: (params) => {

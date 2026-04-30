@@ -24,7 +24,8 @@ export default function PostmanExport() {
   };
 
   const generateCurl = (story) => {
-    let curl = `curl -X ${story.method} \\\n  '${process.env.STAGING_BASE_URL || 'https://api-stage.example.com/v1'}${story.endpoint}' \\\n  -H 'Authorization: Bearer [REDACTED_TOKEN]' \\\n  -H 'Content-Type: application/json'`;
+    const baseUrl = localStorage.getItem('nextest_staging_base_url') || 'https://api-stage.example.com/v1';
+    let curl = `curl -X ${story.method} \\\n  '${baseUrl}${story.endpoint}' \\\n  -H 'Authorization: Bearer [REDACTED_TOKEN]' \\\n  -H 'Content-Type: application/json'`;
 
     if (story.request_headers) {
       try {

@@ -20,7 +20,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+let PORT = process.env.PORT ? parseInt(process.env.PORT) : 3001;
 
 // Middleware
 app.use(cors());
@@ -110,9 +110,22 @@ async function start() {
     } else {
       console.warn('⚠️  MySQL not available — running in degraded mode');
     }
-    app.listen(PORT, () => {
-      console.log(`✅ Nextest API running on http://localhost:${PORT}`);
-    });
+    function listenWithRetry(port, maxPort = 3010) {
+  const server = app.listen(port, () => {
+    console.log(`✅ Nextest API running on http://localhost:${port}`);
+  });
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE' && port < maxPort) {
+      console.warn(`⚠️ Port ${port} in use, trying ${port + 1}`);
+      listenWithRetry(port + 1, maxPort);
+    } else {
+      console.error('❌ Failed to start server:', err);
+    }
+  });
+}
+
+listenWithRetry(PORT);
+
   } catch (err) {
     console.error('❌ Failed to start:', err.message);
     // Start anyway in degraded mode

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useStore } from '../store.jsx';
 import { useToast } from '../components/ToastProvider.jsx';
 import api from '../api.js';
@@ -27,6 +27,48 @@ export default function TestRunner() {
   
   // Progress tracking
   const [progress, setProgress] = useState(0);
+
+  // ── Execution Config (Token + Headers) ──
+  const [configOpen, setConfigOpen] = useState(true);
+  const [execToken, setExecToken] = useState('');
+  const [selectedRole, setSelectedRole] = useState('');
+  const [customHeadersText, setCustomHeadersText] = useState('{\n  "Content-Type": "application/json"\n}');
+  const [headersValid, setHeadersValid] = useState(true);
+
+  // Auto-populate token from role tokens on mount / role change
+  useEffect(() => {
+    const repoName = localStorage.getItem('nextest_repo_name') || '';
+    let roleTokensMap = {};
+    try {
+      const allTokens = JSON.parse(localStorage.getItem('nextest_role_tokens') || '{}');
+      roleTokensMap = allTokens[repoName] || {};
+    } catch {}
+
+    if (selectedRole && roleTokensMap[selectedRole]) {
+      setExecToken(roleTokensMap[selectedRole]);
+    } else if (!execToken) {
+      // Try to find any non-empty role token as default
+      const firstToken = Object.entries(roleTokensMap).find(([, v]) => v?.trim());
+      if (firstToken) {
+        setExecToken(firstToken[1]);
+        setSelectedRole(firstToken[0]);
+      } else if (state.token) {
+        setExecToken(state.token);
+      }
+    }
+  }, [selectedRole]);
+
+  // Validate headers JSON
+  useEffect(() => {
+    try {
+      if (customHeadersText.trim()) {
+        JSON.parse(customHeadersText);
+      }
+      setHeadersValid(true);
+    } catch {
+      setHeadersValid(false);
+    }
+  }, [customHeadersText]);
 
   useEffect(() => {
     loadStories();
@@ -81,24 +123,33 @@ export default function TestRunner() {
   };
 
   const handleExecute = async () => {
-    // Resolve tokens: prefer role-based tokens, fall back to single legacy token
-    const repoName = localStorage.getItem('nextest_repo_name') || '';
-    let roleTokensMap = {};
-    try {
-      const allTokens = JSON.parse(localStorage.getItem('nextest_role_tokens') || '{}');
-      roleTokensMap = allTokens[repoName] || {};
-    } catch {}
-    
-    const hasRoleTokens = Object.values(roleTokensMap).some(t => t?.trim());
-    
-    if (!hasRoleTokens && !state.token) {
-      toast.error('Cannot run tests: No Bearer Tokens configured. Set up role tokens on Dashboard or go to Token Manager.');
+    if (!execToken?.trim()) {
+      toast.error('Cannot run tests: No Bearer Token provided. Paste a token in the Execution Config above.');
       return;
     }
     if (selectedIds.size === 0) {
       toast.warning('No stories selected');
       return;
     }
+
+    // Parse custom headers
+    let globalHeaders = {};
+    try {
+      if (customHeadersText.trim()) {
+        globalHeaders = JSON.parse(customHeadersText);
+      }
+    } catch {
+      toast.error('Custom headers contain invalid JSON. Fix them before executing.');
+      return;
+    }
+
+    // Build role tokens map from localStorage
+    const repoName = localStorage.getItem('nextest_repo_name') || '';
+    let roleTokensMap = {};
+    try {
+      const allTokens = JSON.parse(localStorage.getItem('nextest_role_tokens') || '{}');
+      roleTokensMap = allTokens[repoName] || {};
+    } catch {}
 
     setRunning(true);
     setRunLogs([]);
@@ -120,10 +171,11 @@ export default function TestRunner() {
       }, 500);
 
       const result = await api.executeRun(runData.id, {
-        token: state.token,
+        token: execToken.trim(),
         role_tokens: roleTokensMap,
         story_ids: Array.from(selectedIds),
         base_url: localStorage.getItem('nextest_staging_base_url') || '',
+        global_headers: globalHeaders,
       });
       
       clearInterval(progressInterval);
@@ -161,8 +213,101 @@ export default function TestRunner() {
 
   const methodColors = { GET: 'method-GET', POST: 'method-POST', PUT: 'method-PUT', PATCH: 'method-PATCH', DELETE: 'method-DELETE' };
 
+  // Get available role tokens for the selector
+  const getAvailableRoleTokens = () => {
+    const repoName = localStorage.getItem('nextest_repo_name') || '';
+    try {
+      const allTokens = JSON.parse(localStorage.getItem('nextest_role_tokens') || '{}');
+      const map = allTokens[repoName] || {};
+      return TOKEN_ROLES.filter(r => map[r.key]?.trim());
+    } catch { return []; }
+  };
+
+  const availableRoles = getAvailableRoleTokens();
+
   return (
     <div className="test-runner animate-fade-in">
+
+      {/* ── Execution Config Panel ── */}
+      <div className="card tr-config-card">
+        <div className="card-header" style={{ cursor: 'pointer' }} onClick={() => setConfigOpen(!configOpen)}>
+          <div className="flex items-center gap-2">
+            <span className="card-title">⚙️ Execution Config</span>
+            {execToken?.trim() && (
+              <span className="badge badge-success" style={{ fontSize: '0.65rem' }}>
+                🔑 Token Set
+              </span>
+            )}
+            {!execToken?.trim() && (
+              <span className="badge badge-error" style={{ fontSize: '0.65rem' }}>
+                ⚠ No Token
+              </span>
+            )}
+          </div>
+          <span style={{ fontSize: '18px', transition: 'transform 0.2s', transform: configOpen ? 'rotate(180deg)' : 'rotate(0)' }}>▾</span>
+        </div>
+
+        {configOpen && (
+          <div className="tr-config-body animate-fade-in">
+            <div className="tr-config-grid">
+              {/* Token Section */}
+              <div className="tr-config-section">
+                <div className="flex items-center justify-between" style={{ marginBottom: 'var(--space-2)' }}>
+                  <label className="tr-config-label">🔑 Bearer Token</label>
+                  {availableRoles.length > 0 && (
+                    <div className="flex gap-1">
+                      {availableRoles.map(r => (
+                        <button
+                          key={r.key}
+                          className={`tr-role-chip ${selectedRole === r.key ? 'active' : ''}`}
+                          style={{ '--role-color': r.color }}
+                          onClick={() => setSelectedRole(selectedRole === r.key ? '' : r.key)}
+                          title={`Use ${r.label} token`}
+                        >
+                          {r.icon} {r.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <textarea
+                  className="input input-mono tr-token-input"
+                  placeholder="Paste your Bearer token here (e.g. Bearer eyJhbGci...)"
+                  value={execToken}
+                  onChange={e => { setExecToken(e.target.value); setSelectedRole(''); }}
+                  rows={2}
+                  disabled={running}
+                  spellCheck={false}
+                />
+                <p className="tr-config-hint">
+                  This token will be used as the <code>Authorization</code> header for all stories without role-specific tokens assigned.
+                </p>
+              </div>
+
+              {/* Headers Section */}
+              <div className="tr-config-section">
+                <label className="tr-config-label">📋 Custom Headers (JSON)</label>
+                <textarea
+                  className={`input input-mono tr-headers-input ${!headersValid ? 'input-error' : ''}`}
+                  value={customHeadersText}
+                  onChange={e => setCustomHeadersText(e.target.value)}
+                  rows={3}
+                  disabled={running}
+                  spellCheck={false}
+                />
+                {!headersValid && (
+                  <p className="tr-config-error">⚠ Invalid JSON — headers will not be applied</p>
+                )}
+                <p className="tr-config-hint">
+                  These headers are merged with each story's own headers. Story-level headers take priority.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Main Layout ── */}
       <div className="tr-layout">
 
         {/* Stories Selection */}

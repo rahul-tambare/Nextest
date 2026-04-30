@@ -45,13 +45,33 @@ router.post('/', async (req, res) => {
 // Execute run — proxies each story to staging
 router.post('/:id/execute', async (req, res) => {
   try {
-    const { token, role_tokens, base_url } = req.body;
+    const { token, role_tokens, base_url, story_ids, global_headers } = req.body;
     const runId = req.params.id;
+
+    console.log(`🧪 Execute run ${runId}:`, {
+      hasToken: !!token,
+      tokenPreview: token ? token.substring(0, 20) + '...' : 'NONE',
+      roleTokenKeys: role_tokens ? Object.keys(role_tokens) : [],
+      base_url: base_url || '(empty)',
+      story_ids: story_ids || '(none)',
+      body_keys: Object.keys(req.body || {}),
+    });
+
     const runs = await query('SELECT * FROM test_runs WHERE id = ? AND workspace_id = ?', [runId, req.workspace.id]);
     if (!runs.length) return res.status(404).json({ error: 'Run not found' });
 
-    // Get stories for this run
-    const stories = await query('SELECT * FROM test_stories WHERE workspace_id = ? ORDER BY created_at', [req.workspace.id]);
+    // Get stories for this run — filter by selected story_ids if provided
+    let stories;
+    if (Array.isArray(story_ids) && story_ids.length > 0) {
+      const placeholders = story_ids.map(() => '?').join(',');
+      stories = await query(
+        `SELECT * FROM test_stories WHERE workspace_id = ? AND id IN (${placeholders}) ORDER BY created_at`,
+        [req.workspace.id, ...story_ids]
+      );
+    } else {
+      stories = await query('SELECT * FROM test_stories WHERE workspace_id = ? ORDER BY created_at', [req.workspace.id]);
+    }
+    console.log(`   → Found ${stories.length} stories to execute`);
     const results = [];
     let passed = 0, failed = 0;
     const startTime = Date.now();
@@ -97,16 +117,27 @@ router.post('/:id/execute', async (req, res) => {
         const roleSuffix = exec.role ? ` [${exec.role.toUpperCase()}]` : '';
 
         try {
+          // Safely parse headers — MySQL JSON columns may return objects or strings
+          let storyHeaders = {};
+          if (story.request_headers) {
+            storyHeaders = typeof story.request_headers === 'string'
+              ? JSON.parse(story.request_headers)
+              : story.request_headers;
+          }
+
           const fetchOpts = {
             method: story.method,
             headers: {
-              'Authorization': exec.token,
               'Content-Type': 'application/json',
-              ...(story.request_headers ? JSON.parse(story.request_headers) : {}),
+              ...(global_headers || {}),
+              ...storyHeaders,
+              'Authorization': exec.token,
             },
           };
           if (story.request_body && ['POST', 'PUT', 'PATCH'].includes(story.method)) {
-            fetchOpts.body = typeof story.request_body === 'string' ? story.request_body : JSON.stringify(story.request_body);
+            fetchOpts.body = typeof story.request_body === 'string'
+              ? story.request_body
+              : JSON.stringify(story.request_body);
           }
 
           const response = await fetch(stagingUrl, fetchOpts);

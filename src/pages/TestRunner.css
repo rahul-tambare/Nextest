@@ -2,12 +2,111 @@
   display: grid;
   grid-template-columns: 360px 1fr;
   gap: var(--space-6);
-  height: calc(100vh - var(--header-height) - var(--space-6) * 2);
+  height: calc(100vh - var(--header-height) - var(--space-6) * 2 - 180px);
 }
 @media (max-width: 1000px) {
   .tr-layout { grid-template-columns: 1fr; height: auto; }
 }
 
+/* ── Execution Config Panel ── */
+.tr-config-card {
+  margin-bottom: var(--space-6);
+}
+
+.tr-config-body {
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--glass-border);
+}
+
+.tr-config-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-5);
+}
+@media (max-width: 900px) {
+  .tr-config-grid { grid-template-columns: 1fr; }
+}
+
+.tr-config-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.tr-config-label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.tr-config-hint {
+  font-size: 0.68rem;
+  color: var(--text-tertiary);
+  margin: 0;
+  line-height: 1.4;
+}
+.tr-config-hint code {
+  font-size: 0.65rem;
+  background: var(--bg-inset);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.tr-config-error {
+  font-size: 0.7rem;
+  color: var(--danger-500);
+  margin: 0;
+  font-weight: 500;
+}
+
+.tr-token-input {
+  resize: vertical;
+  min-height: 48px;
+  max-height: 100px;
+  font-size: 0.72rem !important;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.tr-headers-input {
+  resize: vertical;
+  min-height: 60px;
+  max-height: 120px;
+  font-size: 0.72rem !important;
+  line-height: 1.5;
+}
+
+.input-error {
+  border-color: var(--danger-500) !important;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.15) !important;
+}
+
+/* Role chip buttons */
+.tr-role-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  border: 1px solid color-mix(in srgb, var(--role-color) 30%, transparent);
+  background: color-mix(in srgb, var(--role-color) 8%, transparent);
+  color: var(--role-color);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.tr-role-chip:hover {
+  background: color-mix(in srgb, var(--role-color) 18%, transparent);
+  border-color: color-mix(in srgb, var(--role-color) 50%, transparent);
+}
+.tr-role-chip.active {
+  background: color-mix(in srgb, var(--role-color) 25%, transparent);
+  border-color: var(--role-color);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--role-color) 15%, transparent);
+}
+
+/* ── Story List ── */
 .tr-story-list {
   display: flex;
   flex-direction: column;
@@ -15,7 +114,7 @@
   background: var(--glass-border);
   border-radius: var(--radius-md);
   overflow-y: auto;
-  max-height: calc(100vh - 220px);
+  max-height: calc(100vh - 420px);
 }
 
 .tr-story-item {

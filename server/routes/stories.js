@@ -7,7 +7,7 @@ const router = Router();
 // List all stories
 router.get('/', async (req, res) => {
   try {
-    const rows = await query('SELECT * FROM test_stories ORDER BY created_at DESC');
+    const rows = await query('SELECT * FROM test_stories WHERE workspace_id = ? ORDER BY created_at DESC', [req.workspace.id]);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -17,7 +17,7 @@ router.get('/', async (req, res) => {
 // Get story by ID
 router.get('/:id', async (req, res) => {
   try {
-    const rows = await query('SELECT * FROM test_stories WHERE id = ?', [req.params.id]);
+    const rows = await query('SELECT * FROM test_stories WHERE id = ? AND workspace_id = ?', [req.params.id, req.workspace.id]);
     if (!rows.length) return res.status(404).json({ error: 'Story not found' });
     res.json(rows[0]);
   } catch (err) {
@@ -31,9 +31,9 @@ router.post('/', async (req, res) => {
     const id = uuid();
     const { name, description, method, endpoint, expected_status, request_body, request_headers, tags, verification_endpoint, token_roles } = req.body;
     await query(
-      `INSERT INTO test_stories (id, name, description, method, endpoint, expected_status, request_body, request_headers, tags, verification_endpoint, token_roles)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, name, description || null, method, endpoint, expected_status, JSON.stringify(request_body || null), JSON.stringify(request_headers || null), JSON.stringify(tags || []), verification_endpoint || null, JSON.stringify(token_roles || [])]
+      `INSERT INTO test_stories (id, workspace_id, name, description, method, endpoint, expected_status, request_body, request_headers, tags, verification_endpoint, token_roles)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, req.workspace.id, name, description || null, method, endpoint, expected_status, JSON.stringify(request_body || null), JSON.stringify(request_headers || null), JSON.stringify(tags || []), verification_endpoint || null, JSON.stringify(token_roles || [])]
     );
     const rows = await query('SELECT * FROM test_stories WHERE id = ?', [id]);
     res.status(201).json(rows[0]);
@@ -61,7 +61,7 @@ router.put('/:id', async (req, res) => {
 // Delete story
 router.delete('/:id', async (req, res) => {
   try {
-    const result = await query('DELETE FROM test_stories WHERE id = ?', [req.params.id]);
+    const result = await query('DELETE FROM test_stories WHERE id = ? AND workspace_id = ?', [req.params.id, req.workspace.id]);
     res.json({ deleted: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
