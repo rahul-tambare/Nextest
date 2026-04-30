@@ -12,12 +12,15 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
 }
 
 .si-table-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   padding: var(--space-2) var(--space-3);
   background: transparent;
   border: 1px solid transparent;
@@ -40,12 +43,17 @@
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
   color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
 }
 .si-table-item.active .si-table-name { color: var(--accent-solid); }
 
 .si-table-rows {
   font-size: var(--text-xs);
   color: var(--text-tertiary);
+  flex-shrink: 0;
 }
 
 .si-detail-area {

@@ -27,20 +27,25 @@ function getSampleValue(col) {
 export default function SchemaIntrospector() {
   const toast = useToast();
   const [tables, setTables] = useState([]);
+  const [dbError, setDbError] = useState(null);
   const [selectedTable, setSelectedTable] = useState(null);
   const [columns, setColumns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadingCols, setLoadingCols] = useState(false);
   const [generatedBody, setGeneratedBody] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => { loadTables(); }, []);
 
   const loadTables = async () => {
+    setLoading(true);
+    setDbError(null);
     try {
       const data = await api.getSchemaTables();
       setTables(data);
     } catch (err) {
-      // Staging DB may not be configured
+      setDbError(err.message || 'Failed to connect to Staging DB');
+      toast.error(`Database Error: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -101,17 +106,41 @@ export default function SchemaIntrospector() {
           {loading ? (
             <div className="empty-state" style={{ padding: 'var(--space-6)' }}><span className="spinner" /></div>
           ) : tables.length > 0 ? (
-            <div className="si-table-list">
-              {tables.map((t) => (
-                <button
-                  key={t.TABLE_NAME}
-                  className={`si-table-item${selectedTable === t.TABLE_NAME ? ' active' : ''}`}
-                  onClick={() => selectTable(t.TABLE_NAME)}
-                >
-                  <span className="si-table-name">{t.TABLE_NAME}</span>
-                  <span className="si-table-rows">{t.TABLE_ROWS ?? '?'} rows</span>
-                </button>
-              ))}
+            <>
+              <div style={{ padding: '0 var(--space-3) var(--space-3) var(--space-3)' }}>
+                <input
+                  type="text"
+                  className="input input-sm"
+                  placeholder="🔍 Search tables..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  style={{ width: '100%', fontSize: '12px' }}
+                />
+              </div>
+              <div className="si-table-list">
+                {tables.filter(t => t.TABLE_NAME.toLowerCase().includes(searchQuery.toLowerCase())).map((t) => (
+                  <button
+                    key={t.TABLE_NAME}
+                    className={`si-table-item${selectedTable === t.TABLE_NAME ? ' active' : ''}`}
+                    onClick={() => selectTable(t.TABLE_NAME)}
+                  >
+                    <span className="si-table-name" title={t.TABLE_NAME}>{t.TABLE_NAME}</span>
+                    <span className="si-table-rows">{t.TABLE_ROWS ?? '?'} rows</span>
+                  </button>
+                ))}
+                {tables.filter(t => t.TABLE_NAME.toLowerCase().includes(searchQuery.toLowerCase())).length === 0 && (
+                  <div style={{ textAlign: 'center', padding: 'var(--space-4)', fontSize: '12px', color: 'var(--text-tertiary)' }}>
+                    No tables match "{searchQuery}"
+                  </div>
+                )}
+              </div>
+            </>
+          ) : dbError ? (
+            <div className="empty-state" style={{ padding: 'var(--space-6)' }}>
+              <div className="empty-state-icon">⚠️</div>
+              <div className="empty-state-text" style={{ color: 'var(--danger-500)', wordBreak: 'break-word' }}>
+                {dbError}
+              </div>
             </div>
           ) : (
             <div className="empty-state" style={{ padding: 'var(--space-6)' }}>
