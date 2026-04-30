@@ -341,6 +341,9 @@ export default function StoryEditor() {
                       <option value="deepseek-reasoner">Deepseek R1</option>
                       <option value="gpt-4o">GPT-4o</option>
                       <option value="gpt-4o-mini">GPT-4o Mini</option>
+                      <option disabled>── Free Options ──</option>
+                      <option value="groq-llama-3.3-70b-versatile">Groq Llama 3.3 70B (Fast)</option>
+                      <option value="groq-llama-3.1-8b-instant">Groq Llama 3.1 8B (Fast)</option>
                     </select>
                     <button className="btn btn-secondary btn-sm" onClick={handleAIGenerate} disabled={generatingAI}>
                       {generatingAI ? <><span className="spinner" /> Analyzing code...</> : '✨ Generate Payload'}

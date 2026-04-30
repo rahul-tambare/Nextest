@@ -7,28 +7,34 @@ import { stagingQuery } from '../db.js';
 const router = Router();
 
 // Helper to recursively read files with basic filtering
-function readRepoFiles(dir, maxDepth = 4, currentDepth = 0) {
+function readRepoFiles(dir, maxDepth = 3, currentDepth = 0, state = { totalLength: 0 }) {
   let results = '';
-  if (currentDepth > maxDepth) return results;
+  if (currentDepth > maxDepth || state.totalLength > 35000) return results;
   
   try {
     const list = fs.readdirSync(dir);
     for (const file of list) {
+      if (state.totalLength > 35000) break; // hard limit to ~8k tokens to prevent quota exhaustion on Groq/etc
+      
       const fullPath = path.join(dir, file);
       const stat = fs.statSync(fullPath);
       
       if (stat && stat.isDirectory()) {
         if (!['node_modules', '.git', 'dist', 'build', 'coverage', 'docs'].includes(file)) {
-          results += readRepoFiles(fullPath, maxDepth, currentDepth + 1);
+          results += readRepoFiles(fullPath, maxDepth, currentDepth + 1, state);
         }
       } else {
         // Ignore test files to save context space
         if (file.includes('.test.') || file.includes('.spec.')) continue;
         
         if (['.js', '.ts', '.json', '.yaml', '.yml'].includes(path.extname(file))) {
-          // Limit file read to avoid massive prompt sizes
-          const content = fs.readFileSync(fullPath, 'utf8').substring(0, 15000); 
-          results += `\n--- File: ${fullPath} ---\n${content}\n`;
+          // Limit individual file read
+          let content = fs.readFileSync(fullPath, 'utf8');
+          if (content.length > 10000) content = content.substring(0, 10000) + '\n...[TRUNCATED]';
+          
+          const fileSnippet = `\n--- File: ${fullPath} ---\n${content}\n`;
+          state.totalLength += fileSnippet.length;
+          results += fileSnippet;
         }
       }
     }
@@ -207,6 +213,46 @@ Do not wrap in markdown \`\`\`json block. Just pure JSON.
         })
       });
       if (!resp.ok) throw new Error(`OpenAI API error: ${await resp.text()}`);
+      const data = await resp.json();
+      resultText = data.choices[0].message.content;
+      
+    } else if (aiModel.startsWith('groq-')) {
+      if (!process.env.GROQ_API_KEY) return res.status(400).json({ error: 'GROQ_API_KEY is not set in .env' });
+      const realModel = aiModel.replace('groq-', '');
+      const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: realModel,
+          temperature: 0.2,
+          messages: [{ role: 'user', content: prompt }]
+        })
+      });
+      if (!resp.ok) throw new Error(`Groq API error: ${await resp.text()}`);
+      const data = await resp.json();
+      resultText = data.choices[0].message.content;
+
+    } else if (aiModel.startsWith('openrouter-')) {
+      if (!process.env.OPENROUTER_API_KEY) return res.status(400).json({ error: 'OPENROUTER_API_KEY is not set in .env' });
+      const realModel = aiModel.replace('openrouter-', '');
+      const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          'HTTP-Referer': 'http://localhost:3001',
+          'X-Title': 'Nextest QA'
+        },
+        body: JSON.stringify({
+          model: realModel,
+          temperature: 0.2,
+          messages: [{ role: 'user', content: prompt }]
+        })
+      });
+      if (!resp.ok) throw new Error(`OpenRouter API error: ${await resp.text()}`);
       const data = await resp.json();
       resultText = data.choices[0].message.content;
       
