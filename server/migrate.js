@@ -42,6 +42,8 @@ const initialTables = [
     request_headers JSON,
     tags JSON,
     verification_endpoint VARCHAR(500),
+    ai_model VARCHAR(100),
+    ai_iterations INT DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
@@ -157,6 +159,10 @@ export async function runMigrations() {
   // 5. #12 Test dependencies — depends_on references another story_id
   await addColumnIfNotExists('test_stories', 'depends_on', 'VARCHAR(36) DEFAULT NULL');
   await addColumnIfNotExists('test_stories', 'priority', 'INT DEFAULT 0');
+
+  // Add AI tracking columns
+  await addColumnIfNotExists('test_stories', 'ai_model', 'VARCHAR(100) DEFAULT NULL');
+  await addColumnIfNotExists('test_stories', 'ai_iterations', 'INT DEFAULT 0');
 
   // 6. #15 Per-story timeout
   await addColumnIfNotExists('test_stories', 'timeout_ms', 'INT DEFAULT 30000');

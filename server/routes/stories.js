@@ -75,11 +75,11 @@ router.get('/:id', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const id = uuid();
-    const { name, description, method, endpoint, expected_status, request_body, request_headers, tags, verification_endpoint, token_roles, depends_on, priority, timeout_ms } = req.body;
+    const { name, description, method, endpoint, expected_status, request_body, request_headers, tags, verification_endpoint, token_roles, depends_on, priority, timeout_ms, ai_model, ai_iterations } = req.body;
     await query(
-      `INSERT INTO test_stories (id, workspace_id, name, description, method, endpoint, expected_status, request_body, request_headers, tags, verification_endpoint, token_roles, depends_on, priority, timeout_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, req.workspace.id, name, description || null, method, endpoint, expected_status, JSON.stringify(request_body || null), JSON.stringify(request_headers || null), JSON.stringify(tags || []), verification_endpoint || null, JSON.stringify(token_roles || []), depends_on || null, priority || 0, timeout_ms || 30000]
+      `INSERT INTO test_stories (id, workspace_id, name, description, method, endpoint, expected_status, request_body, request_headers, tags, verification_endpoint, token_roles, depends_on, priority, timeout_ms, ai_model, ai_iterations)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, req.workspace.id, name, description || null, method, endpoint, expected_status, JSON.stringify(request_body || null), JSON.stringify(request_headers || null), JSON.stringify(tags || []), verification_endpoint || null, JSON.stringify(token_roles || []), depends_on || null, priority || 0, timeout_ms || 30000, ai_model || null, ai_iterations || 0]
     );
     const rows = await query('SELECT * FROM test_stories WHERE id = ?', [id]);
     res.status(201).json(rows[0]);
@@ -142,10 +142,10 @@ router.post('/import', async (req, res) => {
 // Update story
 router.put('/:id', async (req, res) => {
   try {
-    const { name, description, method, endpoint, expected_status, request_body, request_headers, tags, verification_endpoint, token_roles, depends_on, priority, timeout_ms } = req.body;
+    const { name, description, method, endpoint, expected_status, request_body, request_headers, tags, verification_endpoint, token_roles, depends_on, priority, timeout_ms, ai_model, ai_iterations } = req.body;
     await query(
-      `UPDATE test_stories SET name=?, description=?, method=?, endpoint=?, expected_status=?, request_body=?, request_headers=?, tags=?, verification_endpoint=?, token_roles=?, depends_on=?, priority=?, timeout_ms=? WHERE id=?`,
-      [name, description || null, method, endpoint, expected_status, JSON.stringify(request_body || null), JSON.stringify(request_headers || null), JSON.stringify(tags || []), verification_endpoint || null, JSON.stringify(token_roles || []), depends_on || null, priority || 0, timeout_ms || 30000, req.params.id]
+      `UPDATE test_stories SET name=?, description=?, method=?, endpoint=?, expected_status=?, request_body=?, request_headers=?, tags=?, verification_endpoint=?, token_roles=?, depends_on=?, priority=?, timeout_ms=?, ai_model=?, ai_iterations=? WHERE id=?`,
+      [name, description || null, method, endpoint, expected_status, JSON.stringify(request_body || null), JSON.stringify(request_headers || null), JSON.stringify(tags || []), verification_endpoint || null, JSON.stringify(token_roles || []), depends_on || null, priority || 0, timeout_ms || 30000, ai_model || null, ai_iterations || 0, req.params.id]
     );
     const rows = await query('SELECT * FROM test_stories WHERE id = ?', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Story not found' });

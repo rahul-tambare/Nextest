@@ -2,7 +2,7 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { GoogleGenAI } from '@google/genai';
-import { stagingQuery } from '../db.js';
+import { query, stagingQuery } from '../db.js';
 
 const router = Router();
 
@@ -730,6 +730,39 @@ Return ONLY a valid JSON object matching this schema exactly, with NO markdown f
   } catch (err) {
     console.error('AI analysis error:', err);
     res.status(500).json({ error: `AI Analysis failed: ${err.message}` });
+  }
+});
+
+// ── Get Model Metrics ──
+router.get('/metrics', async (req, res) => {
+  try {
+    // Calculate aggregate metrics for each AI model used in the workspace
+    const metrics = await query(`
+      SELECT 
+        ai_model as model,
+        COUNT(*) as total_stories,
+        AVG(ai_iterations) as avg_iterations,
+        (
+          SELECT COUNT(*) 
+          FROM test_results tr 
+          JOIN test_stories ts2 ON tr.story_id = ts2.id 
+          WHERE ts2.ai_model = ts.ai_model AND tr.status = 'pass' AND ts2.workspace_id = ?
+        ) * 100.0 / 
+        NULLIF((
+          SELECT COUNT(*) 
+          FROM test_results tr 
+          JOIN test_stories ts2 ON tr.story_id = ts2.id 
+          WHERE ts2.ai_model = ts.ai_model AND ts2.workspace_id = ?
+        ), 0) as success_rate
+      FROM test_stories ts
+      WHERE workspace_id = ? AND ai_model IS NOT NULL
+      GROUP BY ai_model
+    `, [req.workspace.id, req.workspace.id, req.workspace.id]);
+
+    res.json(metrics || []);
+  } catch (err) {
+    console.error('Metrics error:', err);
+    res.status(500).json({ error: err.message });
   }
 });
 

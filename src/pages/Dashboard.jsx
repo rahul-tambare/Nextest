@@ -35,6 +35,7 @@ export default function Dashboard() {
     totalRuns: '—',
     openBugs: '—'
   });
+  const [aiMetrics, setAiMetrics] = useState([]);
   const [chartData, setChartData] = useState({
     lineData: null,
     barData: null,
@@ -148,8 +149,11 @@ export default function Dashboard() {
       const [stories, runs, bugs] = await Promise.all([
         api.getStories().catch(() => []),
         api.getRuns().catch(() => []),
-        api.getBugs().catch(() => [])
+        api.getBugs().catch(() => []),
+        fetch('/api/ai/metrics').then(r => r.json()).catch(() => [])
       ]);
+
+      setAiMetrics(Array.isArray(aiResults) ? aiResults : []);
 
       let passRate = '0%';
       let lineData = null;
@@ -272,28 +276,50 @@ export default function Dashboard() {
         ))}
       </div>
       
-      <div className="page-grid grid-cols-2" style={{ marginBottom: 'var(--space-6)' }}>
-        <div className="card">
-          <div className="card-header">
-            <span className="card-title">📈 Pass Rate Trend</span>
-          </div>
-          <div style={{ height: '250px', position: 'relative' }}>
-             {loading ? <div className="empty-state"><span className="spinner" /></div> : 
-              chartData.lineData ? <Line options={{...chartOptions, scales: {...chartOptions.scales, y: {...chartOptions.scales.y, max: 100}}}} data={chartData.lineData} /> : 
-              <div className="empty-state"><div className="empty-state-text">Not enough data to show trends. Run more tests!</div></div>}
-          </div>
-        </div>
-        <div className="card">
-          <div className="card-header">
-            <span className="card-title">⚡ Response Times (Latest Run)</span>
-          </div>
-          <div style={{ height: '250px', position: 'relative' }}>
-             {loading ? <div className="empty-state"><span className="spinner" /></div> : 
-              chartData.barData ? <Bar options={chartOptions} data={chartData.barData} /> : 
-              <div className="empty-state"><div className="empty-state-text">No recent results to display.</div></div>}
           </div>
         </div>
       </div>
+
+      {/* 🤖 AI Model Performance Dashboard */}
+      {aiMetrics.length > 0 && (
+        <div className="card" style={{ marginBottom: 'var(--space-6)', border: '1px solid rgba(129, 140, 248, 0.2)', background: 'linear-gradient(135deg, rgba(129, 140, 248, 0.05) 0%, rgba(6, 182, 212, 0.05) 100%)' }}>
+          <div className="card-header">
+            <span className="card-title">🤖 AI Model Performance Track Record</span>
+            <span className="badge badge-neutral" style={{ fontSize: '10px' }}>Global Workspace Stats</span>
+          </div>
+          <div className="page-grid grid-cols-3" style={{ gap: 'var(--space-4)', padding: 'var(--space-2)' }}>
+            {aiMetrics.sort((a, b) => (b.success_rate || 0) - (a.success_rate || 0)).map(m => (
+              <div key={m.model} className="card" style={{ background: 'var(--bg-card)', padding: 'var(--space-4)', border: '1px solid var(--border-subtle)' }}>
+                <div className="flex items-center justify-between" style={{ marginBottom: 'var(--space-3)' }}>
+                  <span style={{ fontWeight: 600, color: 'var(--accent-solid)', fontSize: '0.9rem' }}>{m.model}</span>
+                  <span className={`badge ${m.success_rate > 80 ? 'badge-success' : m.success_rate > 50 ? 'badge-neutral' : 'badge-error'}`} style={{ fontSize: '11px' }}>
+                    {m.success_rate ? Math.round(m.success_rate) + '%' : '0%'} SR
+                  </span>
+                </div>
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center justify-between" style={{ fontSize: '12px' }}>
+                    <span style={{ color: 'var(--text-tertiary)' }}>Avg Iterations</span>
+                    <span style={{ fontWeight: 600, color: m.avg_iterations <= 1.2 ? '#34d399' : m.avg_iterations <= 2 ? '#fbbf24' : '#f87171' }}>
+                      {Number(m.avg_iterations).toFixed(1)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between" style={{ fontSize: '12px' }}>
+                    <span style={{ color: 'var(--text-tertiary)' }}>Total Stories</span>
+                    <span style={{ fontWeight: 600 }}>{m.total_stories}</span>
+                  </div>
+                  {/* Mini Progress Bar for Success Rate */}
+                  <div style={{ height: '4px', background: 'var(--bg-hover)', borderRadius: '2px', marginTop: 'var(--space-2)', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${m.success_rate || 0}%`, background: 'var(--accent-solid)', transition: 'width 1s ease' }} />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p style={{ fontSize: '11px', color: 'var(--text-tertiary)', padding: '0 var(--space-4) var(--space-4)' }}>
+            Success Rate (SR) is based on actual Test Runner results. Avg Iterations tracks how many "Quick Fixes" or regenerations were needed before saving.
+          </p>
+        </div>
+      )}
 
       
       <div className="card" style={{ marginBottom: 'var(--space-6)' }}>
