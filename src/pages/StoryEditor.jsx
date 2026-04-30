@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useToast } from '../components/ToastProvider.jsx';
 import ConfirmModal from '../components/ConfirmModal.jsx';
 import api from '../api.js';
@@ -65,6 +66,8 @@ const DEFAULT_STORY = {
 
 export default function StoryEditor() {
   const toast = useToast();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [stories, setStories] = useState([]);
   const [endpoints, setEndpoints] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -107,6 +110,32 @@ export default function StoryEditor() {
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const isCreate = params.get('create');
+    const method = params.get('method');
+    const endpoint = params.get('endpoint');
+    const editId = params.get('edit');
+
+    if (isCreate === 'true' && method && endpoint && !isModalOpen) {
+      setActiveStory(null);
+      setFormData({
+        ...DEFAULT_STORY,
+        method: method,
+        endpoint: endpoint,
+      });
+      setAiTestCases([]);
+      setIsModalOpen(true);
+      navigate('/stories', { replace: true });
+    } else if (editId && stories.length > 0 && !isModalOpen) {
+      const storyToEdit = stories.find(s => String(s.id) === editId);
+      if (storyToEdit) {
+        handleEdit(storyToEdit);
+        navigate('/stories', { replace: true });
+      }
+    }
+  }, [location.search, stories, navigate, isModalOpen]);
 
   const loadData = async () => {
     try {
@@ -320,14 +349,15 @@ export default function StoryEditor() {
         allResults = [result];
       }
 
-      // Load the first result into the form
       const firstResult = allResults[0];
+      const generatedBody = firstResult.request_body || firstResult.body || firstResult.payload || firstResult.requestBody;
+      const generatedTags = firstResult.tags || [];
       setFormData(prev => ({
         ...prev,
         name: firstResult.name || prev.name,
         expected_status: firstResult.expected_status || prev.expected_status,
-        request_body: firstResult.request_body ? JSON.stringify(firstResult.request_body, null, 2) : prev.request_body,
-        tags: firstResult.tags ? JSON.stringify(firstResult.tags, null, 2) : prev.tags
+        request_body: generatedBody ? JSON.stringify(generatedBody, null, 2) : prev.request_body,
+        tags: generatedTags ? JSON.stringify(generatedTags, null, 2) : prev.tags
       }));
 
       // Store ALL test cases (including first) in the list for easy switching
@@ -864,6 +894,29 @@ export default function StoryEditor() {
                 <input className="input" name="name" value={formData.name} onChange={handleChange} placeholder="e.g. Create User - Admin Success" />
               </div>
 
+              <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                <label className="form-label">Description</label>
+                <textarea className="textarea" rows={2} name="description" value={formData.description || ''} onChange={handleChange} />
+              </div>
+            </div>
+              <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                <label className="form-label">Endpoint</label>
+                <div className="flex gap-2">
+                  <input className="input input-mono" style={{ flex: 1 }} name="endpoint" value={formData.endpoint} onChange={handleChange} placeholder="/users" />
+                  {endpoints.length > 0 && (
+                    <select className="select" style={{ width: 'auto', maxWidth: '200px' }} onChange={(e) => {
+                      const ep = endpoints.find(x => x.id === e.target.value);
+                      if (ep) handleEndpointSelect(ep);
+                    }}>
+                      <option value="">Map from parsed...</option>
+                      {endpoints.map(ep => (
+                        <option key={ep.id} value={ep.id}>{ep.method} {ep.path}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </div>
+
               <div className="form-group">
                 <label className="form-label">Method</label>
                 <select className="select" name="method" value={formData.method} onChange={handleChange}>
@@ -937,27 +990,32 @@ export default function StoryEditor() {
               </div>
 
               <div className="form-group" style={{ gridColumn: '1 / -1' }}>
-                <label className="form-label">Endpoint</label>
-                <div className="flex gap-2">
-                  <input className="input input-mono" style={{ flex: 1 }} name="endpoint" value={formData.endpoint} onChange={handleChange} placeholder="/users" />
-                  {endpoints.length > 0 && (
-                    <select className="select" style={{ width: 'auto', maxWidth: '200px' }} onChange={(e) => {
-                      const ep = endpoints.find(x => x.id === e.target.value);
-                      if (ep) handleEndpointSelect(ep);
-                    }}>
-                      <option value="">Map from parsed...</option>
-                      {endpoints.map(ep => (
-                        <option key={ep.id} value={ep.id}>{ep.method} {ep.path}</option>
-                      ))}
-                    </select>
-                  )}
+                <div className="flex items-center justify-between">
+                  <label className="form-label">Headers (JSON)</label>
+                  <div className="flex gap-2">
+                    <button 
+                      className="btn btn-ghost btn-sm" 
+                      onClick={() => setFormData(prev => ({ ...prev, request_headers: '{\n  "moduleid": "22",\n  "platform": "4"\n}' }))}
+                      title="Inject moduleid: 22 and platform: 4"
+                    >
+                      👑 Admin Headers
+                    </button>
+                    <button 
+                      className="btn btn-ghost btn-sm" 
+                      onClick={() => setFormData(prev => ({ ...prev, request_headers: '{\n  "platform": "4"\n}' }))}
+                      title="Inject platform: 4 without moduleid"
+                    >
+                      👤 Consumer Headers
+                    </button>
+                  </div>
                 </div>
+                <textarea className="textarea input-mono" rows={3} name="request_headers" value={formData.request_headers} onChange={handleChange} />
               </div>
 
               <div className="form-group" style={{ gridColumn: '1 / -1', background: 'rgba(129, 140, 248, 0.05)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(129, 140, 248, 0.2)' }}>
-                <div className="flex items-center justify-between" style={{ marginBottom: 'var(--space-2)' }}>
-                  <label className="form-label" style={{ margin: 0, color: 'var(--accent-solid)' }}>✨ AI Auto-Generate</label>
-                  <div className="flex gap-2">
+                <div className="flex items-center justify-between" style={{ marginBottom: 'var(--space-2)', flexWrap: 'wrap', gap: '8px' }}>
+                  <label className="form-label" style={{ margin: 0, color: 'var(--accent-solid)', whiteSpace: 'nowrap' }}>✨ AI Auto-Generate</label>
+                  <div className="flex gap-2" style={{ flexWrap: 'wrap' }}>
                     <select 
                       className="select select-sm" 
                       value={aiModel} 
@@ -1247,29 +1305,6 @@ export default function StoryEditor() {
               </div>
 
               <div className="form-group" style={{ gridColumn: '1 / -1' }}>
-                <div className="flex items-center justify-between">
-                  <label className="form-label">Headers (JSON)</label>
-                  <div className="flex gap-2">
-                    <button 
-                      className="btn btn-ghost btn-sm" 
-                      onClick={() => setFormData(prev => ({ ...prev, request_headers: '{\n  "moduleid": "22",\n  "platform": "4"\n}' }))}
-                      title="Inject moduleid: 22 and platform: 4"
-                    >
-                      👑 Admin Headers
-                    </button>
-                    <button 
-                      className="btn btn-ghost btn-sm" 
-                      onClick={() => setFormData(prev => ({ ...prev, request_headers: '{\n  "platform": "4"\n}' }))}
-                      title="Inject platform: 4 without moduleid"
-                    >
-                      👤 Consumer Headers
-                    </button>
-                  </div>
-                </div>
-                <textarea className="textarea input-mono" rows={3} name="request_headers" value={formData.request_headers} onChange={handleChange} />
-              </div>
-
-              <div className="form-group" style={{ gridColumn: '1 / -1' }}>
                 <label className="form-label">Tags (JSON Array)</label>
                 <input className="input input-mono" name="tags" value={formData.tags} onChange={handleChange} placeholder='["regression", "auth"]' />
               </div>
@@ -1279,11 +1314,6 @@ export default function StoryEditor() {
                 <input className="input input-mono" name="verification_endpoint" value={formData.verification_endpoint || ''} onChange={handleChange} placeholder="/users/{id}" />
               </div>
 
-              <div className="form-group" style={{ gridColumn: '1 / -1' }}>
-                <label className="form-label">Description</label>
-                <textarea className="textarea" rows={2} name="description" value={formData.description || ''} onChange={handleChange} />
-              </div>
-            </div>
 
             <div className="modal-footer">
               <button className="btn btn-ghost" onClick={() => setIsModalOpen(false)}>Cancel</button>

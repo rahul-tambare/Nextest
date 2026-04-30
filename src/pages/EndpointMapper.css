@@ -6,3 +6,115 @@
   line-height: 1.6;
   tab-size: 2;
 }
+
+/* Endpoint row with actions */
+.em-endpoint-row {
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.em-endpoint-row:hover {
+  background: rgba(129, 140, 248, 0.04);
+}
+.em-endpoint-row.expanded {
+  background: rgba(129, 140, 248, 0.06);
+  border-bottom: none;
+}
+
+.em-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.em-story-count {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* Expanded stories panel */
+.em-stories-panel {
+  background: var(--bg-inset);
+  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--space-3) var(--space-4);
+  animation: emSlide 0.2s ease;
+}
+
+@keyframes emSlide {
+  from { opacity: 0; max-height: 0; }
+  to { opacity: 1; max-height: 600px; }
+}
+
+.em-story-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  transition: border-color 0.15s ease;
+  margin-bottom: 6px;
+}
+.em-story-item:hover {
+  border-color: rgba(129, 140, 248, 0.3);
+}
+.em-story-item:last-child {
+  margin-bottom: 0;
+}
+
+.em-story-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.em-story-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.em-story-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.em-create-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-3);
+}
+
+/* Modal form */
+.em-modal {
+  max-width: 720px;
+}
+
+.em-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+@media (max-width: 768px) {
+  .em-form-grid {
+    grid-template-columns: 1fr;
+  }
+  .em-modal {
+    max-width: 95vw;
+  }
+}

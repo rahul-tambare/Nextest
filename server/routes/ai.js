@@ -6,11 +6,101 @@ import { stagingQuery } from '../db.js';
 
 const router = Router();
 
+// Helper to trace AWS SAM dependencies from template.yaml to handler to imports
+function traceEndpointFiles(repoPath, endpoint, method) {
+  try {
+    const templatePath = fs.existsSync(path.join(repoPath, 'template.yaml')) ? path.join(repoPath, 'template.yaml') : 
+                         fs.existsSync(path.join(repoPath, 'template.yml')) ? path.join(repoPath, 'template.yml') : null;
+    if (!templatePath) return null;
+
+    const content = fs.readFileSync(templatePath, 'utf8');
+    const lines = content.split('\n');
+    
+    let currentCodeUri = '';
+    let currentHandler = '';
+    let foundHandler = null;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const codeUriMatch = line.match(/CodeUri:\s*['"]?([^'"\s]+)['"]?/);
+      if (codeUriMatch) currentCodeUri = codeUriMatch[1];
+      const handlerMatch = line.match(/Handler:\s*['"]?([^'"\s]+)['"]?/);
+      if (handlerMatch) currentHandler = handlerMatch[1];
+      const pathMatch = line.match(/Path:\s*['"]?([^'"\s]+)['"]?/);
+      if (pathMatch) {
+        let samPath = pathMatch[1];
+        let samRegexStr = samPath.replace(/\{[^}]+\}/g, '[^/]+');
+        let samRegex = new RegExp('^' + samRegexStr + '$');
+        if (samRegex.test(endpoint) || endpoint === samPath) {
+          for (let j = Math.max(0, i - 2); j < Math.min(i + 5, lines.length); j++) {
+             const methodMatch = lines[j].match(/Method:\s*['"]?([^'"\s]+)['"]?/i);
+             if (methodMatch && methodMatch[1].toLowerCase() === method.toLowerCase()) {
+                foundHandler = { codeUri: currentCodeUri, handler: currentHandler };
+                break;
+             }
+          }
+        }
+      }
+    }
+    
+    if (!foundHandler) return null;
+
+    let handlerFile = foundHandler.handler.split('.')[0]; 
+    const filesToRead = new Set();
+    const baseDir = path.join(repoPath, foundHandler.codeUri || '');
+    const possibleFiles = [
+      path.join(baseDir, handlerFile + '.js'),
+      path.join(baseDir, handlerFile + '.ts'),
+      path.join(repoPath, handlerFile + '.js'),
+      path.join(repoPath, handlerFile + '.ts')
+    ];
+    
+    let entryFile = null;
+    for (const f of possibleFiles) {
+      if (fs.existsSync(f)) { entryFile = f; break; }
+    }
+    
+    if (!entryFile) return null;
+    
+    function traceImports(filePath, depth = 0) {
+      if (depth > 3 || filesToRead.has(filePath) || !fs.existsSync(filePath)) return;
+      filesToRead.add(filePath);
+      const code = fs.readFileSync(filePath, 'utf8');
+      const importRegex = /(?:require\(['"]([^'"]+)['"]\)|import\s+.*?from\s*['"]([^'"]+)['"])/g;
+      let match;
+      while ((match = importRegex.exec(code)) !== null) {
+        const importPath = match[1] || match[2];
+        if (!importPath || !importPath.startsWith('.')) continue;
+        const dir = path.dirname(filePath);
+        const resolvedBase = path.join(dir, importPath);
+        const exts = ['.js', '.ts', '/index.js', '/index.ts', '.json'];
+        for (const ext of exts) {
+           const full = resolvedBase.endsWith('.js') || resolvedBase.endsWith('.ts') || resolvedBase.endsWith('.json') ? resolvedBase : resolvedBase + ext;
+           if (fs.existsSync(full)) { traceImports(full, depth + 1); break; }
+        }
+      }
+    }
+    
+    traceImports(entryFile);
+    
+    let resultStr = `\n--- File: ${templatePath} ---\n${content}\n`;
+    for (const file of filesToRead) {
+       let fileContent = fs.readFileSync(file, 'utf8');
+       if (fileContent.length > 40000) fileContent = fileContent.substring(0, 40000) + '\n...[TRUNCATED TO SAVE CACHE]';
+       resultStr += `\n--- File: ${file} ---\n${fileContent}\n`;
+    }
+    return resultStr;
+  } catch (err) {
+    console.error('Trace error:', err);
+    return null;
+  }
+}
+
 // Helper to recursively read files with smart filtering to reduce AI input cache
-function readRepoFiles(dir, endpoint = '', maxDepth = 5, currentDepth = 0, state = { totalLength: 0 }) {
+function readRepoFiles(dir, endpoint = '', maxDepth = 10, currentDepth = 0, state = { totalLength: 0 }) {
   let results = '';
-  // Limit to ~25000 chars (approx 6k tokens) to accommodate SAM template + layers + handlers
-  if (currentDepth > maxDepth || state.totalLength > 25000) return results;
+  // Limit to ~250000 chars to accommodate larger schemas and handlers for modern LLMs
+  if (currentDepth > maxDepth || state.totalLength > 250000) return results;
   
   // Extract keywords from the endpoint (e.g., "/api/runs/execute" -> "runs", "execute")
   const endpointParts = (endpoint || '').split('/').filter(p => p && p !== 'api' && !p.startsWith(':'));
@@ -30,7 +120,7 @@ function readRepoFiles(dir, endpoint = '', maxDepth = 5, currentDepth = 0, state
     });
 
     for (const file of list) {
-      if (state.totalLength > 25000) break;
+      if (state.totalLength > 250000) break;
       
       const fullPath = path.join(dir, file);
       const stat = fs.statSync(fullPath);
@@ -54,12 +144,11 @@ function readRepoFiles(dir, endpoint = '', maxDepth = 5, currentDepth = 0, state
                              
           const matchesEndpoint = endpointParts.some(p => file.includes(p) || content.includes(p));
           
-          if (endpointParts.length > 0 && !isCoreFile && !matchesEndpoint) {
-            continue; // Skip file to save input cache
-          }
+          // Removed the aggressive skip (continue) because models now support huge context limits (250,000 characters).
+          // We want the AI to see schemas, DTOs, and controllers even if their filename doesn't perfectly match the endpoint path.
 
-          // Limit individual file size to 6000 chars
-          if (content.length > 6000) content = content.substring(0, 6000) + '\n...[TRUNCATED TO SAVE CACHE]';
+          // Limit individual file size to 40000 chars to capture large validation schemas
+          if (content.length > 40000) content = content.substring(0, 40000) + '\n...[TRUNCATED TO SAVE CACHE]';
           
           const fileSnippet = `\n--- File: ${fullPath} ---\n${content}\n`;
           state.totalLength += fileSnippet.length;
@@ -87,8 +176,11 @@ router.post('/generate', async (req, res) => {
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     
-    // Read the local code (filtered by endpoint to reduce input cache)
-    const codeContext = readRepoFiles(repo_path, endpoint);
+    // Attempt intelligent AST tracing first, fallback to recursive read
+    let codeContext = traceEndpointFiles(repo_path, endpoint, method);
+    if (!codeContext) {
+      codeContext = readRepoFiles(repo_path, endpoint);
+    }
     
     // Read the Database Schema (if configured)
     let dbContext = '';
@@ -117,6 +209,14 @@ router.post('/generate', async (req, res) => {
     const roleString = token_roles && token_roles.length > 0 ? token_roles.join(', ') : 'Default/None';
     const useCachePrompt = req.body.use_cache_prompt === true;
 
+    const tracingInstruction = `
+CRITICAL TRACING INSTRUCTION (AWS SAM / Serverless):
+1. First, search 'template.yaml' (if present) to find which handler is mapped to the endpoint path '${endpoint}'.
+2. Locate that handler file in the provided context to see how the request is processed.
+3. Trace the handler to find which schema file (e.g. Joi validation) it uses. You MUST satisfy this schema perfectly.
+4. Follow the data flow to the service file to understand what data is inserted into the database. Make sure your request body has all the fields required by the service logic!
+`;
+
     if (useCachePrompt) {
       if (test_cases && test_cases.trim() !== '') {
         prompt = `
@@ -137,6 +237,7 @@ The user has requested the following test cases to be generated:
 ${test_cases}
 
 Analyze the code and the requested test cases. Generate a payload for EACH requested test case.
+${tracingInstruction}
 CRITICAL VALIDATION INSTRUCTION: Look very carefully for any validation schemas (Joi, Yup, Zod, express-validator, etc.) in the provided code context. 
 If a schema exists for this endpoint, you MUST include ALL required fields in your request_body (e.g. nested objects like "pagination": {"fetchLimit": 10}). Failure to include required schema fields will result in 400 Bad Request errors.
 
@@ -173,6 +274,7 @@ We need to test the API endpoint: ${method} ${endpoint}
 USER ROLE CONTEXT: The request will be executed by users with these roles: ${roleString}. Keep this in mind when determining what data is appropriate.
 
 Analyze the code and determine a default, successful test case:
+${tracingInstruction}
 CRITICAL VALIDATION INSTRUCTION: Look very carefully for any validation schemas (Joi, Yup, Zod, express-validator, etc.) in the provided code context. 
 If a schema exists for this endpoint, you MUST include ALL required fields in your request_body (e.g. nested objects like "pagination": {"fetchLimit": 10}). Failure to include required schema fields will result in 400 Bad Request errors.
 
@@ -207,6 +309,7 @@ The user has requested the following test cases to be generated:
 ${test_cases}
 
 Analyze the code and the requested test cases. Generate a payload for EACH requested test case.
+${tracingInstruction}
 CRITICAL VALIDATION INSTRUCTION: Look very carefully for any validation schemas (Joi, Yup, Zod, express-validator, etc.) in the provided code context. 
 If a schema exists for this endpoint, you MUST include ALL required fields in your request_body (e.g. nested objects like "pagination": {"fetchLimit": 10}). Failure to include required schema fields will result in 400 Bad Request errors.
 
@@ -239,6 +342,7 @@ ${codeContext}
 ${dbContext}
 
 Analyze the code and determine a default, successful test case:
+${tracingInstruction}
 CRITICAL VALIDATION INSTRUCTION: Look very carefully for any validation schemas (Joi, Yup, Zod, express-validator, etc.) in the provided code context. 
 If a schema exists for this endpoint, you MUST include ALL required fields in your request_body (e.g. nested objects like "pagination": {"fetchLimit": 10}). Failure to include required schema fields will result in 400 Bad Request errors.
 
@@ -372,7 +476,16 @@ Do not wrap in markdown \`\`\`json block. Just pure JSON.
       return res.status(400).json({ error: 'Unsupported model selected: ' + aiModel });
     }
 
-    const text = resultText.trim().replace(/^```(?:json)?/, '').replace(/```$/, '').trim();
+    let text = resultText.trim();
+    // Strip <think> blocks (often output by Deepseek R1 and other reasoning models)
+    text = text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    if (jsonMatch) {
+      text = jsonMatch[1].trim();
+    } else {
+      const match = text.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
+      if (match) text = match[1];
+    }
     const result = JSON.parse(text);
 
     res.json(result);
@@ -393,8 +506,11 @@ router.post('/analyze-failure', async (req, res) => {
 
     const aiModel = model || 'gemini-2.5-flash';
 
-    // Read the local code (filtered by endpoint to reduce input cache)
-    const codeContext = readRepoFiles(repo_path, endpoint);
+    // Attempt intelligent AST tracing first, fallback to recursive read
+    let codeContext = traceEndpointFiles(repo_path, endpoint, method);
+    if (!codeContext) {
+      codeContext = readRepoFiles(repo_path, endpoint);
+    }
     
     // Read the Database Schema (if configured)
     let dbContext = '';
@@ -598,7 +714,16 @@ Return ONLY a valid JSON object matching this schema exactly, with NO markdown f
       return res.status(400).json({ error: 'Unsupported model selected: ' + aiModel });
     }
 
-    const text = resultText.trim().replace(/^```(?:json)?/, '').replace(/```$/, '').trim();
+    let text = resultText.trim();
+    // Strip <think> blocks (often output by Deepseek R1 and other reasoning models)
+    text = text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    if (jsonMatch) {
+      text = jsonMatch[1].trim();
+    } else {
+      const match = text.match(/(\[[\s\S]*\]|\{[\s\S]*\})/);
+      if (match) text = match[1];
+    }
     const result = JSON.parse(text);
 
     res.json(result);
