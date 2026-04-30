@@ -45,7 +45,7 @@ router.post('/', async (req, res) => {
 // Execute run — proxies each story to staging
 router.post('/:id/execute', async (req, res) => {
   try {
-    const { token, base_url } = req.body;
+    const { token, role_tokens, base_url } = req.body;
     const runId = req.params.id;
     const runs = await query('SELECT * FROM test_runs WHERE id = ? AND workspace_id = ?', [runId, req.workspace.id]);
     if (!runs.length) return res.status(404).json({ error: 'Run not found' });
@@ -57,61 +57,97 @@ router.post('/:id/execute', async (req, res) => {
     const startTime = Date.now();
 
     for (const story of stories) {
-      const resultId = uuid();
-      const storyStart = Date.now();
-      const stagingUrl = (base_url || req.workspace.staging_base_url || process.env.STAGING_BASE_URL || '') + story.endpoint;
-
-      try {
-        const fetchOpts = {
-          method: story.method,
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            ...(story.request_headers ? JSON.parse(story.request_headers) : {}),
-          },
-        };
-        if (story.request_body && ['POST', 'PUT', 'PATCH'].includes(story.method)) {
-          fetchOpts.body = typeof story.request_body === 'string' ? story.request_body : JSON.stringify(story.request_body);
+      // Determine which tokens to test with for this story
+      let storyRoles = story.token_roles || [];
+      if (typeof storyRoles === 'string') {
+        try { storyRoles = JSON.parse(storyRoles); } catch { storyRoles = []; }
+      }
+      if (!Array.isArray(storyRoles)) storyRoles = [];
+      
+      // Build token execution list: one test per assigned role, or fallback to single token
+      let tokenExecutions = [];
+      if (storyRoles.length > 0 && role_tokens) {
+        for (const role of storyRoles) {
+          const roleToken = role_tokens[role];
+          if (roleToken) {
+            tokenExecutions.push({ role, token: roleToken });
+          }
         }
-
-        const response = await fetch(stagingUrl, fetchOpts);
-        const responseBody = await response.text();
-        const elapsed = Date.now() - storyStart;
-        const status = response.status === story.expected_status ? 'pass' : 'fail';
-        if (status === 'pass') passed++; else failed++;
-
-        let parsedBody = null;
-        try { parsedBody = JSON.parse(responseBody); } catch { parsedBody = responseBody; }
-
-        await query(
-          `INSERT INTO test_results (id, run_id, story_id, status, expected_status, actual_status, response_body, response_time_ms, curl_command, executed_at) VALUES (?,?,?,?,?,?,?,?,?,NOW())`,
-          [resultId, runId, story.id, status, story.expected_status, response.status, JSON.stringify(parsedBody), elapsed, buildCurl(story, stagingUrl)]
-        );
-        results.push({ id: resultId, story_id: story.id, story_name: story.name, status, expected_status: story.expected_status, actual_status: response.status, response_time_ms: elapsed });
-        
-        if (status === 'fail') {
-          await query(
-            `INSERT INTO bug_reports (id, workspace_id, result_id, story_name, endpoint, expected_status, actual_status, response_body, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', NOW())`,
-            [uuid(), req.workspace.id, resultId, story.name, story.endpoint, story.expected_status, response.status, JSON.stringify(parsedBody)]
-          );
-        }
-      } catch (err) {
-        failed++;
+      }
+      // Fallback: if no role tokens matched, use the legacy single token
+      if (tokenExecutions.length === 0 && token) {
+        tokenExecutions.push({ role: null, token });
+      }
+      // Skip if no tokens available at all
+      if (tokenExecutions.length === 0) {
+        const resultId = uuid();
         await query(
           `INSERT INTO test_results (id, run_id, story_id, status, expected_status, error_message, executed_at) VALUES (?,?,?,?,?,?,NOW())`,
-          [resultId, runId, story.id, 'error', story.expected_status, err.message]
+          [resultId, runId, story.id, 'error', story.expected_status, 'No token available for this story\'s assigned roles']
         );
-        results.push({ id: resultId, story_id: story.id, story_name: story.name, status: 'error', error: err.message });
+        failed++;
+        results.push({ id: resultId, story_id: story.id, story_name: story.name, status: 'error', error: 'No token available' });
+        continue;
+      }
+
+      for (const exec of tokenExecutions) {
+        const resultId = uuid();
+        const storyStart = Date.now();
+        const stagingUrl = (base_url || req.workspace.staging_base_url || process.env.STAGING_BASE_URL || '') + story.endpoint;
+        const roleSuffix = exec.role ? ` [${exec.role.toUpperCase()}]` : '';
+
+        try {
+          const fetchOpts = {
+            method: story.method,
+            headers: {
+              'Authorization': `Bearer ${exec.token}`,
+              'Content-Type': 'application/json',
+              ...(story.request_headers ? JSON.parse(story.request_headers) : {}),
+            },
+          };
+          if (story.request_body && ['POST', 'PUT', 'PATCH'].includes(story.method)) {
+            fetchOpts.body = typeof story.request_body === 'string' ? story.request_body : JSON.stringify(story.request_body);
+          }
+
+          const response = await fetch(stagingUrl, fetchOpts);
+          const responseBody = await response.text();
+          const elapsed = Date.now() - storyStart;
+          const status = response.status === story.expected_status ? 'pass' : 'fail';
+          if (status === 'pass') passed++; else failed++;
+
+          let parsedBody = null;
+          try { parsedBody = JSON.parse(responseBody); } catch { parsedBody = responseBody; }
+
+          await query(
+            `INSERT INTO test_results (id, run_id, story_id, status, expected_status, actual_status, response_body, response_time_ms, curl_command, executed_at) VALUES (?,?,?,?,?,?,?,?,?,NOW())`,
+            [resultId, runId, story.id, status, story.expected_status, response.status, JSON.stringify(parsedBody), elapsed, buildCurl(story, stagingUrl)]
+          );
+          results.push({ id: resultId, story_id: story.id, story_name: story.name + roleSuffix, status, expected_status: story.expected_status, actual_status: response.status, response_time_ms: elapsed, role: exec.role });
+          
+          if (status === 'fail') {
+            await query(
+              `INSERT INTO bug_reports (id, workspace_id, result_id, story_name, endpoint, expected_status, actual_status, response_body, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', NOW())`,
+              [uuid(), req.workspace.id, resultId, story.name + roleSuffix, story.endpoint, story.expected_status, response.status, JSON.stringify(parsedBody)]
+            );
+          }
+        } catch (err) {
+          failed++;
+          await query(
+            `INSERT INTO test_results (id, run_id, story_id, status, expected_status, error_message, executed_at) VALUES (?,?,?,?,?,?,NOW())`,
+            [resultId, runId, story.id, 'error', story.expected_status, err.message]
+          );
+          results.push({ id: resultId, story_id: story.id, story_name: story.name + roleSuffix, status: 'error', error: err.message, role: exec.role });
+        }
       }
     }
 
     const duration = Date.now() - startTime;
     await query(
       'UPDATE test_runs SET completed_at=NOW(), passed=?, failed=?, duration_ms=?, status=?, total_stories=? WHERE id=?',
-      [passed, failed, duration, 'completed', stories.length, runId]
+      [passed, failed, duration, 'completed', results.length, runId]
     );
 
-    res.json({ run_id: runId, total: stories.length, passed, failed, duration_ms: duration, results });
+    res.json({ run_id: runId, total: results.length, passed, failed, duration_ms: duration, results });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

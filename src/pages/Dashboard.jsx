@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { NavLink } from 'react-router-dom';
 import api from '../api.js';
 
@@ -47,6 +47,10 @@ export default function Dashboard() {
   const [repoUrls, setRepoUrls] = useState(() => {
     try { return JSON.parse(localStorage.getItem('nextest_repo_urls') || '{}'); } catch { return {}; }
   });
+  const [roleTokens, setRoleTokens] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('nextest_role_tokens') || '{}'); } catch { return {}; }
+  });
+  const [showTokens, setShowTokens] = useState({});
   const [stagingUrl, setStagingUrl] = useState(localStorage.getItem('nextest_staging_base_url') || '');
   const [loadingRepos, setLoadingRepos] = useState(false);
 
@@ -71,6 +75,46 @@ export default function Dashboard() {
      } finally {
          setLoadingRepos(false);
      }
+  };
+
+  const TOKEN_ROLES = [
+    { key: 'admin', label: 'Admin', icon: '👑', color: '#f59e0b' },
+    { key: 'loyalty', label: 'Loyalty', icon: '💎', color: '#8b5cf6' },
+    { key: 'buyer', label: 'Buyer', icon: '🛒', color: '#06b6d4' },
+    { key: 'seller', label: 'Seller', icon: '🏪', color: '#10b981' },
+  ];
+
+  const currentRepoTokens = useMemo(() => {
+    if (!selectedRepo) return {};
+    return roleTokens[selectedRepo] || {};
+  }, [selectedRepo, roleTokens]);
+
+  const handleRoleTokenChange = (role, value) => {
+    if (!selectedRepo) return;
+    const updated = {
+      ...roleTokens,
+      [selectedRepo]: {
+        ...(roleTokens[selectedRepo] || {}),
+        [role]: value,
+      }
+    };
+    setRoleTokens(updated);
+    localStorage.setItem('nextest_role_tokens', JSON.stringify(updated));
+  };
+
+  const toggleShowToken = (role) => {
+    setShowTokens(prev => ({ ...prev, [role]: !prev[role] }));
+  };
+
+  const decodeJWTPreview = (token) => {
+    try {
+      if (!token) return null;
+      const parts = token.split('.');
+      if (parts.length !== 3) return null;
+      const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+      const isExpired = payload.exp ? (Date.now() / 1000 > payload.exp) : false;
+      return { sub: payload.sub || payload.userId || payload.email || '—', exp: payload.exp ? new Date(payload.exp * 1000).toLocaleString() : '—', isExpired };
+    } catch { return null; }
   };
 
   const handleSelectRepo = (repoName) => {
@@ -303,6 +347,7 @@ export default function Dashboard() {
         </div>
 
         {selectedRepo && (
+          <>
             <div className="page-grid grid-cols-2">
                 <div className="form-group">
                   <label className="form-label">Active Repo Path</label>
@@ -324,6 +369,81 @@ export default function Dashboard() {
                   </p>
                 </div>
             </div>
+
+            {/* Role-Based Auth Tokens */}
+            <div style={{ marginTop: 'var(--space-5)', padding: 'var(--space-4)', borderRadius: 'var(--radius-lg)', background: 'rgba(129, 140, 248, 0.04)', border: '1px solid rgba(129, 140, 248, 0.12)' }}>
+              <div className="flex items-center justify-between" style={{ marginBottom: 'var(--space-4)' }}>
+                <div className="flex items-center gap-2">
+                  <span style={{ fontSize: '1.1rem' }}>🔐</span>
+                  <span style={{ fontWeight: 600, fontSize: 'var(--text-sm)', color: 'var(--text-primary)' }}>Role-Based Auth Tokens</span>
+                </div>
+                <span className="badge badge-neutral" style={{ fontSize: '10px' }}>
+                  {Object.values(currentRepoTokens).filter(Boolean).length} / {TOKEN_ROLES.length} configured
+                </span>
+              </div>
+
+              <div className="page-grid grid-cols-2" style={{ gap: 'var(--space-4)' }}>
+                {TOKEN_ROLES.map(role => {
+                  const tokenVal = currentRepoTokens[role.key] || '';
+                  const jwt = decodeJWTPreview(tokenVal);
+                  return (
+                    <div key={role.key} style={{ 
+                      padding: 'var(--space-3)', 
+                      borderRadius: 'var(--radius-md)', 
+                      background: 'var(--bg-card)', 
+                      border: `1px solid ${tokenVal ? role.color + '40' : 'var(--border-subtle)'}`,
+                      transition: 'border-color 0.2s ease'
+                    }}>
+                      <div className="flex items-center justify-between" style={{ marginBottom: 'var(--space-2)' }}>
+                        <div className="flex items-center gap-2">
+                          <span>{role.icon}</span>
+                          <span style={{ fontWeight: 600, fontSize: 'var(--text-sm)', color: role.color }}>{role.label} Token</span>
+                        </div>
+                        {tokenVal && (
+                          <span className="badge" style={{ 
+                            fontSize: '9px', 
+                            background: jwt?.isExpired ? 'rgba(239,68,68,0.15)' : 'rgba(52,211,153,0.15)', 
+                            color: jwt?.isExpired ? '#ef4444' : '#34d399',
+                            padding: '2px 6px'
+                          }}>
+                            {jwt?.isExpired ? '⚠ Expired' : '✓ Set'}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex gap-2" style={{ marginBottom: tokenVal && jwt ? 'var(--space-2)' : 0 }}>
+                        <input
+                          className="input input-mono"
+                          type={showTokens[role.key] ? 'text' : 'password'}
+                          value={tokenVal}
+                          onChange={(e) => handleRoleTokenChange(role.key, e.target.value)}
+                          placeholder={`Paste ${role.label} bearer token...`}
+                          style={{ flex: 1, fontSize: '11px' }}
+                        />
+                        <button 
+                          className="btn btn-ghost btn-icon" 
+                          onClick={() => toggleShowToken(role.key)} 
+                          title={showTokens[role.key] ? 'Hide' : 'Show'}
+                          style={{ fontSize: '12px', minWidth: '32px' }}
+                        >
+                          {showTokens[role.key] ? '🙈' : '👁️'}
+                        </button>
+                      </div>
+                      {tokenVal && jwt && (
+                        <div style={{ fontSize: '10px', color: 'var(--text-tertiary)', display: 'flex', gap: 'var(--space-3)' }}>
+                          <span>Sub: <strong style={{ color: 'var(--text-secondary)' }}>{jwt.sub}</strong></span>
+                          <span>Exp: <strong style={{ color: jwt.isExpired ? '#ef4444' : 'var(--text-secondary)' }}>{jwt.exp}</strong></span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <p style={{ fontSize: '10px', color: 'var(--text-tertiary)', marginTop: 'var(--space-3)' }}>
+                Configure tokens per role. When creating stories, you can select which role(s) to test with. Each story will use its assigned token(s) during test execution.
+              </p>
+            </div>
+          </>
         )}
       </div>
 

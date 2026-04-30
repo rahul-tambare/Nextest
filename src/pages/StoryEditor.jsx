@@ -30,6 +30,13 @@ function buildCurlForStory(story) {
   return curl;
 }
 
+const TOKEN_ROLES = [
+  { key: 'admin', label: 'Admin', icon: '👑', color: '#f59e0b' },
+  { key: 'loyalty', label: 'Loyalty', icon: '💎', color: '#8b5cf6' },
+  { key: 'buyer', label: 'Buyer', icon: '🛒', color: '#06b6d4' },
+  { key: 'seller', label: 'Seller', icon: '🏪', color: '#10b981' },
+];
+
 const DEFAULT_STORY = {
   name: '',
   description: '',
@@ -41,6 +48,7 @@ const DEFAULT_STORY = {
   tags: '[]',
   verification_endpoint: '',
   test_cases: '',
+  token_roles: [],
 };
 
 export default function StoryEditor() {
@@ -82,11 +90,16 @@ export default function StoryEditor() {
 
   const handleEdit = (story) => {
     setActiveStory(story);
+    let parsedTokenRoles = story.token_roles || [];
+    if (typeof parsedTokenRoles === 'string') {
+      try { parsedTokenRoles = JSON.parse(parsedTokenRoles); } catch { parsedTokenRoles = []; }
+    }
     setFormData({
       ...story,
       request_body: typeof story.request_body === 'string' ? story.request_body : JSON.stringify(story.request_body, null, 2),
       request_headers: typeof story.request_headers === 'string' ? story.request_headers : JSON.stringify(story.request_headers, null, 2),
       tags: typeof story.tags === 'string' ? story.tags : JSON.stringify(story.tags, null, 2),
+      token_roles: Array.isArray(parsedTokenRoles) ? parsedTokenRoles : [],
     });
     setIsModalOpen(true);
   };
@@ -120,6 +133,7 @@ export default function StoryEditor() {
         request_headers: headers,
         tags,
         expected_status: parseInt(formData.expected_status, 10),
+        token_roles: formData.token_roles || [],
       };
 
       setSaving(true);
@@ -154,6 +168,26 @@ export default function StoryEditor() {
       method: ep.method,
       endpoint: ep.path,
     }));
+  };
+
+  const toggleTokenRole = (roleKey) => {
+    setFormData((prev) => {
+      const current = prev.token_roles || [];
+      const exists = current.includes(roleKey);
+      return {
+        ...prev,
+        token_roles: exists ? current.filter(r => r !== roleKey) : [...current, roleKey],
+      };
+    });
+  };
+
+  const getConfiguredRoles = () => {
+    try {
+      const repoName = localStorage.getItem('nextest_repo_name') || '';
+      const allTokens = JSON.parse(localStorage.getItem('nextest_role_tokens') || '{}');
+      const repoTokens = allTokens[repoName] || {};
+      return TOKEN_ROLES.filter(r => repoTokens[r.key]?.trim());
+    } catch { return []; }
   };
 
   const handleAIGenerate = async () => {
@@ -258,6 +292,18 @@ export default function StoryEditor() {
                 <code className="se-story-endpoint truncate">{story.endpoint}</code>
                 <div className="se-story-meta">
                   <span className="badge badge-neutral">Exp: {story.expected_status}</span>
+                  {(() => {
+                    let roles = story.token_roles || [];
+                    if (typeof roles === 'string') { try { roles = JSON.parse(roles); } catch { roles = []; } }
+                    return Array.isArray(roles) ? roles.map(r => {
+                      const role = TOKEN_ROLES.find(tr => tr.key === r);
+                      return role ? (
+                        <span key={r} className="chip" style={{ background: role.color + '20', color: role.color, border: `1px solid ${role.color}40`, fontSize: '10px' }}>
+                          {role.icon} {role.label}
+                        </span>
+                      ) : null;
+                    }) : null;
+                  })()}
                   {(Array.isArray(story.tags) ? story.tags : []).map(t => (
                     <span key={t} className="chip">{t}</span>
                   ))}
@@ -298,6 +344,66 @@ export default function StoryEditor() {
               <div className="form-group">
                 <label className="form-label">Expected Status</label>
                 <input className="input" type="number" name="expected_status" value={formData.expected_status} onChange={handleChange} />
+              </div>
+
+              {/* Token Role Selector */}
+              <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                <div className="flex items-center justify-between" style={{ marginBottom: 'var(--space-2)' }}>
+                  <label className="form-label" style={{ margin: 0 }}>🔐 Auth Token Roles</label>
+                  <span style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}>
+                    {(formData.token_roles || []).length} selected
+                  </span>
+                </div>
+                <div className="flex gap-2 flex-wrap">
+                  {(() => {
+                    const configuredRoles = getConfiguredRoles();
+                    if (configuredRoles.length === 0) {
+                      return (
+                        <div style={{ 
+                          padding: 'var(--space-3)', 
+                          borderRadius: 'var(--radius-md)', 
+                          background: 'rgba(239, 68, 68, 0.06)', 
+                          border: '1px dashed rgba(239, 68, 68, 0.3)',
+                          fontSize: '11px',
+                          color: 'var(--text-tertiary)',
+                          width: '100%',
+                          textAlign: 'center'
+                        }}>
+                          ⚠️ No tokens configured. Go to <strong>Dashboard → Global Project Configuration → Role-Based Auth Tokens</strong> to set up tokens first.
+                        </div>
+                      );
+                    }
+                    return configuredRoles.map(role => {
+                      const isSelected = (formData.token_roles || []).includes(role.key);
+                      return (
+                        <button
+                          key={role.key}
+                          type="button"
+                          className="btn btn-sm"
+                          onClick={() => toggleTokenRole(role.key)}
+                          style={{
+                            background: isSelected ? role.color + '20' : 'var(--bg-inset)',
+                            color: isSelected ? role.color : 'var(--text-tertiary)',
+                            border: `1.5px solid ${isSelected ? role.color : 'var(--border-subtle)'}`,
+                            fontWeight: isSelected ? 600 : 400,
+                            transition: 'all 0.2s ease',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                          }}
+                        >
+                          <span>{role.icon}</span>
+                          <span>{role.label}</span>
+                          {isSelected && <span style={{ fontSize: '12px' }}>✓</span>}
+                        </button>
+                      );
+                    });
+                  })()}
+                </div>
+                <p style={{ fontSize: '10px', color: 'var(--text-tertiary)', marginTop: 'var(--space-1)' }}>
+                  Select which role token(s) this test should run with. Each selected role will execute as a separate test during the run.
+                </p>
               </div>
 
               <div className="form-group" style={{ gridColumn: '1 / -1' }}>

@@ -135,5 +135,8 @@ export async function runMigrations() {
   await addColumnIfNotExists('bug_reports', 'workspace_id', 'VARCHAR(36) REFERENCES workspaces(id) ON DELETE CASCADE');
   await addColumnIfNotExists('endpoints', 'workspace_id', 'VARCHAR(36) REFERENCES workspaces(id) ON DELETE CASCADE');
 
+  // 3. Token roles per story
+  await addColumnIfNotExists('test_stories', 'token_roles', 'JSON DEFAULT NULL');
+
   console.log(`   → Multi-tenancy schema migration complete`);
 }

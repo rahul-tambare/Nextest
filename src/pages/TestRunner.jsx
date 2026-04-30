@@ -4,6 +4,13 @@ import { useToast } from '../components/ToastProvider.jsx';
 import api from '../api.js';
 import './TestRunner.css';
 
+const TOKEN_ROLES = [
+  { key: 'admin', label: 'Admin', icon: '👑', color: '#f59e0b' },
+  { key: 'loyalty', label: 'Loyalty', icon: '💎', color: '#8b5cf6' },
+  { key: 'buyer', label: 'Buyer', icon: '🛒', color: '#06b6d4' },
+  { key: 'seller', label: 'Seller', icon: '🏪', color: '#10b981' },
+];
+
 export default function TestRunner() {
   const { state } = useStore();
   const toast = useToast();
@@ -74,8 +81,18 @@ export default function TestRunner() {
   };
 
   const handleExecute = async () => {
-    if (!state.token) {
-      toast.error('Cannot run tests: No Bearer Token provided (Go to Token Manager)');
+    // Resolve tokens: prefer role-based tokens, fall back to single legacy token
+    const repoName = localStorage.getItem('nextest_repo_name') || '';
+    let roleTokensMap = {};
+    try {
+      const allTokens = JSON.parse(localStorage.getItem('nextest_role_tokens') || '{}');
+      roleTokensMap = allTokens[repoName] || {};
+    } catch {}
+    
+    const hasRoleTokens = Object.values(roleTokensMap).some(t => t?.trim());
+    
+    if (!hasRoleTokens && !state.token) {
+      toast.error('Cannot run tests: No Bearer Tokens configured. Set up role tokens on Dashboard or go to Token Manager.');
       return;
     }
     if (selectedIds.size === 0) {
@@ -104,6 +121,7 @@ export default function TestRunner() {
 
       const result = await api.executeRun(runData.id, {
         token: state.token,
+        role_tokens: roleTokensMap,
         story_ids: Array.from(selectedIds),
         base_url: localStorage.getItem('nextest_staging_base_url') || '',
       });
@@ -184,18 +202,35 @@ export default function TestRunner() {
             {loading ? (
               <div className="empty-state"><span className="spinner" /></div>
             ) : filteredStories.length > 0 ? (
-              filteredStories.map((s) => (
+              filteredStories.map((s) => {
+                let storyRoles = s.token_roles || [];
+                if (typeof storyRoles === 'string') { try { storyRoles = JSON.parse(storyRoles); } catch { storyRoles = []; } }
+                return (
                 <label key={s.id} className={`tr-story-item${selectedIds.has(s.id) ? ' selected' : ''}`}>
                   <input type="checkbox" checked={selectedIds.has(s.id)} onChange={() => toggleSelect(s.id)} disabled={running} />
-                  <div className="flex flex-col gap-1">
+                  <div className="flex flex-col gap-1" style={{ flex: 1 }}>
                     <div className="flex items-center gap-2">
                       <span className={`method ${methodColors[s.method] || ''}`}>{s.method}</span>
                       <span className="tr-story-name">{s.name}</span>
                     </div>
-                    <code className="tr-story-endpoint">{s.endpoint}</code>
+                    <div className="flex items-center gap-2">
+                      <code className="tr-story-endpoint">{s.endpoint}</code>
+                      {Array.isArray(storyRoles) && storyRoles.length > 0 && (
+                        <div className="flex gap-1" style={{ marginLeft: 'auto' }}>
+                          {storyRoles.map(r => {
+                            const role = TOKEN_ROLES.find(tr => tr.key === r);
+                            return role ? (
+                              <span key={r} style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', background: role.color + '20', color: role.color, fontWeight: 600 }}>
+                                {role.icon} {role.label}
+                              </span>
+                            ) : null;
+                          })}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </label>
-              ))
+              );})
             ) : (
               <div className="empty-state" style={{ padding: 'var(--space-6)' }}>
                 <div className="empty-state-text">No stories available. Create them in the Story Editor.</div>
