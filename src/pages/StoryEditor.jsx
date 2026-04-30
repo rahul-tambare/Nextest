@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useToast } from '../components/ToastProvider.jsx';
+import ConfirmModal from '../components/ConfirmModal.jsx';
 import api from '../api.js';
 import './StoryEditor.css';
 
@@ -89,6 +90,20 @@ export default function StoryEditor() {
   const [quickTestResults, setQuickTestResults] = useState({});
   const [expandedStoryId, setExpandedStoryId] = useState(null);
 
+  // #4 Search & Filter
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterMethod, setFilterMethod] = useState('');
+  const [filterStatusRange, setFilterStatusRange] = useState('');
+
+  // #11 Import Modal
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState('');
+  const [importFormat, setImportFormat] = useState('json');
+  const [importing, setImporting] = useState(false);
+
+  // #3 Confirm Modal
+  const [confirmState, setConfirmState] = useState({ open: false, id: null, name: '' });
+
   useEffect(() => {
     loadData();
   }, []);
@@ -132,15 +147,65 @@ export default function StoryEditor() {
     setIsModalOpen(true);
   };
 
-  const handleDelete = async (id) => {
-    if (!confirm('Are you sure you want to delete this story?')) return;
+  const handleDelete = async (id, name) => {
+    // #3 Use proper confirm modal instead of browser confirm()
+    setConfirmState({ open: true, id, name: name || 'this story' });
+  };
+
+  const confirmDelete = async () => {
+    const { id } = confirmState;
+    setConfirmState({ open: false, id: null, name: '' });
     try {
       await api.deleteStory(id);
-      toast.success('Story deleted');
+      toast.success('Story moved to trash (soft-deleted)');
       loadData();
     } catch (err) {
       toast.error(`Delete failed: ${err.message}`);
     }
+  };
+
+  // #11 Handle import
+  const handleImport = async () => {
+    if (!importText.trim()) { toast.error('Paste data to import'); return; }
+    setImporting(true);
+    try {
+      let payload;
+      if (importFormat === 'postman') {
+        const collection = JSON.parse(importText);
+        payload = { format: 'postman', collection };
+      } else {
+        const stories = JSON.parse(importText);
+        payload = { format: 'json', stories: Array.isArray(stories) ? stories : [stories] };
+      }
+      const result = await api.importStories(payload);
+      toast.success(`Imported ${result.imported} stories!`);
+      setImportOpen(false);
+      setImportText('');
+      loadData();
+    } catch (err) {
+      toast.error(`Import failed: ${err.message}`);
+    } finally { setImporting(false); }
+  };
+
+  // #4 Filter stories client-side
+  const getFilteredStories = () => {
+    return stories.filter(s => {
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        const nameMatch = s.name?.toLowerCase().includes(q);
+        const endpointMatch = s.endpoint?.toLowerCase().includes(q);
+        const descMatch = s.description?.toLowerCase().includes(q);
+        if (!nameMatch && !endpointMatch && !descMatch) return false;
+      }
+      if (filterMethod && s.method !== filterMethod) return false;
+      if (filterStatusRange) {
+        const status = s.expected_status;
+        if (filterStatusRange === '2xx' && (status < 200 || status >= 300)) return false;
+        if (filterStatusRange === '4xx' && (status < 400 || status >= 500)) return false;
+        if (filterStatusRange === '5xx' && (status < 500 || status >= 600)) return false;
+      }
+      return true;
+    });
   };
 
   const handleSave = async () => {
@@ -569,20 +634,56 @@ export default function StoryEditor() {
 
   return (
     <div className="story-editor animate-fade-in">
+      {/* #3 Confirm Delete Modal */}
+      <ConfirmModal
+        isOpen={confirmState.open}
+        onConfirm={confirmDelete}
+        onCancel={() => setConfirmState({ open: false, id: null, name: '' })}
+        title="Delete Story"
+        message={`Are you sure you want to delete "${confirmState.name}"? It will be soft-deleted and can be restored.`}
+        confirmText="Delete"
+        variant="danger"
+      />
+
       <div className="card">
         <div className="card-header">
           <span className="card-title">📝 QA Test Stories</span>
-          <button className="btn btn-primary" onClick={handleCreate}>+ New Story</button>
+          <div className="flex gap-2">
+            <button className="btn btn-secondary btn-sm" onClick={() => setImportOpen(true)}>📥 Import</button>
+            <button className="btn btn-primary" onClick={handleCreate}>+ New Story</button>
+          </div>
+        </div>
+
+        {/* #4 Search & Filter Bar */}
+        <div className="se-filter-bar">
+          <input
+            className="input se-search-input"
+            placeholder="🔍 Search by name, endpoint, description..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+          />
+          <select className="select select-sm" value={filterMethod} onChange={e => setFilterMethod(e.target.value)} style={{ width: 'auto', minWidth: '90px' }}>
+            <option value="">All Methods</option>
+            <option value="GET">GET</option><option value="POST">POST</option><option value="PUT">PUT</option><option value="PATCH">PATCH</option><option value="DELETE">DELETE</option>
+          </select>
+          <select className="select select-sm" value={filterStatusRange} onChange={e => setFilterStatusRange(e.target.value)} style={{ width: 'auto', minWidth: '90px' }}>
+            <option value="">All Status</option>
+            <option value="2xx">2xx Success</option><option value="4xx">4xx Client</option><option value="5xx">5xx Server</option>
+          </select>
+          <span style={{ fontSize: '10px', color: 'var(--text-tertiary)', whiteSpace: 'nowrap' }}>
+            {getFilteredStories().length} / {stories.length} stories
+          </span>
         </div>
 
         {loading ? (
           <div className="empty-state" style={{ padding: 'var(--space-8)' }}><span className="spinner" /></div>
-        ) : stories.length > 0 ? (
+        ) : getFilteredStories().length > 0 ? (
           <div className="se-grid">
             {(() => {
+              const filteredStories = getFilteredStories();
               // Group stories by method+endpoint
               const grouped = {};
-              stories.forEach(story => {
+              filteredStories.forEach(story => {
                 const key = `${story.method}::${story.endpoint}`;
                 if (!grouped[key]) grouped[key] = [];
                 grouped[key].push(story);
@@ -630,7 +731,7 @@ export default function StoryEditor() {
                             navigator.clipboard.writeText(curl).then(() => toast.success('curl copied to clipboard!'));
                           }}>📋</button>
                           <button className="btn btn-ghost btn-icon" onClick={() => handleEdit(main)}>✏️</button>
-                          <button className="btn btn-ghost btn-icon" onClick={() => handleDelete(main.id)} style={{ color: 'var(--color-error)' }}>🗑️</button>
+                          <button className="btn btn-ghost btn-icon" onClick={() => handleDelete(main.id, main.name)} style={{ color: 'var(--color-error)' }}>🗑️</button>
                         </div>
                       </div>
                       <code className="se-story-endpoint truncate">{main.endpoint}</code>
@@ -727,7 +828,7 @@ export default function StoryEditor() {
                                 navigator.clipboard.writeText(curl).then(() => toast.success('curl copied!'));
                               }}>📋</button>
                               <button className="btn btn-ghost btn-icon btn-xs" onClick={() => handleEdit(sub)}>✏️</button>
-                              <button className="btn btn-ghost btn-icon btn-xs" onClick={() => handleDelete(sub.id)} style={{ color: 'var(--color-error)' }}>🗑️</button>
+                              <button className="btn btn-ghost btn-icon btn-xs" onClick={() => handleDelete(sub.id, sub.name)} style={{ color: 'var(--color-error)' }}>🗑️</button>
                             </div>
                           </div>
                           {/* Sub-story expandable detail */}
@@ -1188,6 +1289,46 @@ export default function StoryEditor() {
               <button className="btn btn-ghost" onClick={() => setIsModalOpen(false)}>Cancel</button>
               <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
                 {saving ? <><span className="spinner" /> Saving...</> : '💾 Save Story'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* #11 Import Modal */}
+      {importOpen && (
+        <div className="modal-overlay" onClick={() => setImportOpen(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '600px' }}>
+            <div className="modal-header">
+              <span className="modal-title">📥 Import Stories</span>
+              <button className="btn btn-ghost btn-icon" onClick={() => setImportOpen(false)}>✕</button>
+            </div>
+            <div style={{ padding: 'var(--space-4)' }}>
+              <div className="flex gap-2" style={{ marginBottom: 'var(--space-3)' }}>
+                <select className="select" value={importFormat} onChange={e => setImportFormat(e.target.value)}>
+                  <option value="json">JSON Array</option>
+                  <option value="postman">Postman Collection v2.1</option>
+                </select>
+              </div>
+              <textarea
+                className="textarea input-mono"
+                rows={12}
+                value={importText}
+                onChange={e => setImportText(e.target.value)}
+                placeholder={importFormat === 'postman'
+                  ? 'Paste Postman Collection JSON here...'
+                  : '[{"name": "Test", "method": "GET", "endpoint": "/api/test", "expected_status": 200}]'}
+                spellCheck={false}
+              />
+              <p style={{ fontSize: '10px', color: 'var(--text-tertiary)', marginTop: 'var(--space-2)' }}>
+                {importFormat === 'json'
+                  ? 'Paste a JSON array of story objects. Fields: name, method, endpoint, expected_status, request_body, request_headers, tags.'
+                  : 'Paste an exported Postman Collection (v2.1 JSON). Items will be converted to test stories.'}
+              </p>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-ghost" onClick={() => setImportOpen(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleImport} disabled={importing}>
+                {importing ? <><span className="spinner" /> Importing...</> : '📥 Import'}
               </button>
             </div>
           </div>

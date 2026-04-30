@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import api from '../api.js';
 import './TestHistory.css';
 
@@ -9,8 +10,9 @@ function formatDuration(ms) {
 }
 
 export default function TestHistory() {
+  const [searchParams, setSearchParams] = useSearchParams(); // #6
   const [runs, setRuns] = useState([]);
-  const [selectedRunId, setSelectedRunId] = useState(null);
+  const [selectedRunId, setSelectedRunId] = useState(searchParams.get('run') || null);
   const [runDetails, setRunDetails] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadingDetails, setLoadingDetails] = useState(false);
@@ -20,7 +22,10 @@ export default function TestHistory() {
   }, []);
 
   useEffect(() => {
-    if (selectedRunId) loadRunDetails(selectedRunId);
+    if (selectedRunId) {
+      loadRunDetails(selectedRunId);
+      setSearchParams({ run: selectedRunId }); // #6 update URL
+    }
   }, [selectedRunId]);
 
   const loadRuns = async () => {

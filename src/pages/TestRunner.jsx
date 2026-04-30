@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useStore } from '../store.jsx';
 import { useToast } from '../components/ToastProvider.jsx';
+import ConfirmModal from '../components/ConfirmModal.jsx';
 import api from '../api.js';
 import './TestRunner.css';
 
@@ -20,22 +21,32 @@ export default function TestRunner() {
   const [running, setRunning] = useState(false);
   const [activeRun, setActiveRun] = useState(null);
   const [runLogs, setRunLogs] = useState([]);
-  
+  const consoleRef = useRef(null);
+
   // Tag filtering
   const [allTags, setAllTags] = useState([]);
   const [selectedTag, setSelectedTag] = useState('');
-  
-  // Progress tracking
   const [progress, setProgress] = useState(0);
 
-  // ── Execution Config (Token + Headers) ──
+  // #5 Last run results persistence
+  const [lastRunId, setLastRunId] = useState(null);
+
+  // Execution Config
   const [configOpen, setConfigOpen] = useState(true);
   const [execToken, setExecToken] = useState('');
   const [selectedRole, setSelectedRole] = useState('');
   const [customHeadersText, setCustomHeadersText] = useState('{\n  "Content-Type": "application/json"\n}');
   const [headersValid, setHeadersValid] = useState(true);
 
-  // Auto-populate token from role tokens on mount / role change
+  // #2 Retry config
+  const [retryCount, setRetryCount] = useState(1);
+  // #15 Timeout config
+  const [timeoutMs, setTimeoutMs] = useState(30000);
+  // #16 Concurrency config
+  const [concurrency, setConcurrency] = useState(3);
+  const [delayMs, setDelayMs] = useState(100);
+
+  // Auto-populate token from role tokens
   useEffect(() => {
     const repoName = localStorage.getItem('nextest_repo_name') || '';
     let roleTokensMap = {};
@@ -43,132 +54,103 @@ export default function TestRunner() {
       const allTokens = JSON.parse(localStorage.getItem('nextest_role_tokens') || '{}');
       roleTokensMap = allTokens[repoName] || {};
     } catch {}
-
     if (selectedRole && roleTokensMap[selectedRole]) {
       setExecToken(roleTokensMap[selectedRole]);
     } else if (!execToken) {
-      // Try to find any non-empty role token as default
       const firstToken = Object.entries(roleTokensMap).find(([, v]) => v?.trim());
-      if (firstToken) {
-        setExecToken(firstToken[1]);
-        setSelectedRole(firstToken[0]);
-      } else if (state.token) {
-        setExecToken(state.token);
-      }
+      if (firstToken) { setExecToken(firstToken[1]); setSelectedRole(firstToken[0]); }
+      else if (state.token) setExecToken(state.token);
     }
   }, [selectedRole]);
 
-  // Validate headers JSON
   useEffect(() => {
-    try {
-      if (customHeadersText.trim()) {
-        JSON.parse(customHeadersText);
-      }
-      setHeadersValid(true);
-    } catch {
-      setHeadersValid(false);
-    }
+    try { if (customHeadersText.trim()) JSON.parse(customHeadersText); setHeadersValid(true); } catch { setHeadersValid(false); }
   }, [customHeadersText]);
 
-  useEffect(() => {
-    loadStories();
-  }, []);
+  useEffect(() => { loadStories(); loadLastRun(); }, []);
 
   const loadStories = async () => {
     try {
       const sts = await api.getStories();
       setStories(sts);
       setSelectedIds(new Set(sts.map((s) => s.id)));
-      
-      // Extract unique tags
       const tags = new Set();
-      sts.forEach(s => {
-        if (Array.isArray(s.tags)) s.tags.forEach(t => tags.add(t));
-      });
+      sts.forEach(s => { if (Array.isArray(s.tags)) s.tags.forEach(t => tags.add(t)); });
       setAllTags(Array.from(tags).sort());
-      
-    } catch (err) {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
+    } catch {} finally { setLoading(false); }
   };
 
-  const filteredStories = stories.filter(s => {
-      if (!selectedTag) return true;
-      return Array.isArray(s.tags) && s.tags.includes(selectedTag);
-  });
-  
-  // Update selection when filter changes
+  // #5 Load most recent run results on mount
+  const loadLastRun = async () => {
+    try {
+      const runs = await api.getRuns();
+      const lastCompleted = runs.find(r => r.status === 'completed');
+      if (lastCompleted) {
+        const details = await api.getRun(lastCompleted.id);
+        setLastRunId(lastCompleted.id);
+        setActiveRun(details);
+        // Populate logs from stored results
+        if (details.results) {
+          const logs = details.results.map(res => ({
+            time: new Date(res.executed_at).toLocaleTimeString(),
+            type: res.status === 'pass' ? 'success' : 'error',
+            message: res.status === 'pass'
+              ? `✅ [PASS] ${res.story_name} (HTTP ${res.actual_status}) - ${res.response_time_ms}ms${res.retry_count > 0 ? ` (retry ${res.retry_count})` : ''}`
+              : res.status === 'fail'
+              ? `❌ [FAIL] ${res.story_name} (Expected ${res.expected_status}, got HTTP ${res.actual_status})${res.failure_type ? ` [${res.failure_type}]` : ''}`
+              : `⚠️ [ERROR] ${res.story_name} - ${res.error_message || 'Unknown'}`,
+          }));
+          setRunLogs(logs);
+        }
+      }
+    } catch {}
+  };
+
+  const filteredStories = stories.filter(s => !selectedTag || (Array.isArray(s.tags) && s.tags.includes(selectedTag)));
+
   useEffect(() => {
-     if (stories.length > 0) {
-         setSelectedIds(new Set(filteredStories.map(s => s.id)));
-     }
+    if (stories.length > 0) setSelectedIds(new Set(filteredStories.map(s => s.id)));
   }, [selectedTag]);
 
-  const toggleSelect = (id) => {
-    const next = new Set(selectedIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setSelectedIds(next);
-  };
+  const toggleSelect = (id) => { const next = new Set(selectedIds); if (next.has(id)) next.delete(id); else next.add(id); setSelectedIds(next); };
+  const toggleAll = () => { if (selectedIds.size === filteredStories.length) setSelectedIds(new Set()); else setSelectedIds(new Set(filteredStories.map((s) => s.id))); };
+  const addLog = (type, message) => { setRunLogs((prev) => [...prev, { time: new Date().toLocaleTimeString(), type, message }]); };
 
-  const toggleAll = () => {
-    if (selectedIds.size === filteredStories.length) setSelectedIds(new Set());
-    else setSelectedIds(new Set(filteredStories.map((s) => s.id)));
-  };
-
-  const addLog = (type, message) => {
-    setRunLogs((prev) => [...prev, { time: new Date().toLocaleTimeString(), type, message }]);
-  };
+  // Auto-scroll console
+  useEffect(() => { if (consoleRef.current) consoleRef.current.scrollTop = consoleRef.current.scrollHeight; }, [runLogs]);
 
   const handleExecute = async () => {
-    if (!execToken?.trim()) {
-      toast.error('Cannot run tests: No Bearer Token provided. Paste a token in the Execution Config above.');
-      return;
-    }
-    if (selectedIds.size === 0) {
-      toast.warning('No stories selected');
-      return;
-    }
-
-    // Parse custom headers
+    if (!execToken?.trim()) { toast.error('No Bearer Token provided.'); return; }
+    if (selectedIds.size === 0) { toast.warning('No stories selected'); return; }
     let globalHeaders = {};
-    try {
-      if (customHeadersText.trim()) {
-        globalHeaders = JSON.parse(customHeadersText);
-      }
-    } catch {
-      toast.error('Custom headers contain invalid JSON. Fix them before executing.');
-      return;
-    }
+    try { if (customHeadersText.trim()) globalHeaders = JSON.parse(customHeadersText); } catch { toast.error('Invalid JSON headers.'); return; }
 
-    // Build role tokens map from localStorage
     const repoName = localStorage.getItem('nextest_repo_name') || '';
     let roleTokensMap = {};
+    try { const allTokens = JSON.parse(localStorage.getItem('nextest_role_tokens') || '{}'); roleTokensMap = allTokens[repoName] || {}; } catch {}
+
+    // #1 Pre-check token expiry
     try {
-      const allTokens = JSON.parse(localStorage.getItem('nextest_role_tokens') || '{}');
-      roleTokensMap = allTokens[repoName] || {};
+      const parts = execToken.replace('Bearer ', '').split('.');
+      if (parts.length === 3) {
+        const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
+        if (payload.exp && Date.now() / 1000 > payload.exp) {
+          toast.warning('⚠️ Your token appears expired! Results may show 401 errors.');
+        }
+      }
     } catch {}
 
-    setRunning(true);
-    setRunLogs([]);
+    setRunning(true); setRunLogs([]); setProgress(0);
     setActiveRun({ passed: 0, failed: 0, total: selectedIds.size, duration: 0 });
-    addLog('info', `Starting test execution for ${selectedIds.size} stories...`);
+    addLog('info', `Starting execution: ${selectedIds.size} stories | Retries: ${retryCount} | Timeout: ${timeoutMs/1000}s | Concurrency: ${concurrency}`);
 
     try {
-      // 1. Create run record
-      addLog('info', 'Creating run session in DB...');
-      const runData = await api.createRun({ story_ids: Array.from(selectedIds) });
+      addLog('info', 'Creating run session...');
+      const runData = await api.createRun({ story_ids: Array.from(selectedIds), concurrency, retry_count: retryCount });
+      addLog('info', 'Executing requests against staging...');
 
-      // 2. Execute tests
-      addLog('info', 'Executing requests against Staging proxy...');
-      
-      // Simulate progress while waiting for backend
       setProgress(10);
-      const progressInterval = setInterval(() => {
-          setProgress(p => p < 90 ? p + (90 - p) / 10 : p);
-      }, 500);
+      const progressInterval = setInterval(() => { setProgress(p => p < 90 ? p + (90 - p) / 10 : p); }, 500);
 
       const result = await api.executeRun(runData.id, {
         token: execToken.trim(),
@@ -176,73 +158,65 @@ export default function TestRunner() {
         story_ids: Array.from(selectedIds),
         base_url: localStorage.getItem('nextest_staging_base_url') || '',
         global_headers: globalHeaders,
+        concurrency,
+        retry_count: retryCount,
+        timeout_ms: timeoutMs,
+        delay_ms: delayMs,
       });
-      
-      clearInterval(progressInterval);
-      setProgress(100);
 
-      // 3. Log results
+      clearInterval(progressInterval); setProgress(100);
+
       for (const res of result.results) {
+        const retryInfo = res.retry_count > 0 ? ` (retry ${res.retry_count}/${retryCount})` : '';
+        const failureTag = res.failure_type ? ` [${res.failure_type}]` : '';
         if (res.status === 'pass') {
-          addLog('success', `✅ [PASS] ${res.story_name} (HTTP ${res.actual_status}) - ${res.response_time_ms}ms`);
+          addLog('success', `✅ [PASS] ${res.story_name} (HTTP ${res.actual_status}) - ${res.response_time_ms}ms${retryInfo}`);
         } else if (res.status === 'fail') {
-          addLog('error', `❌ [FAIL] ${res.story_name} (Expected ${res.expected_status}, got HTTP ${res.actual_status})`);
+          addLog('error', `❌ [FAIL] ${res.story_name} (Expected ${res.expected_status}, got HTTP ${res.actual_status})${failureTag}${retryInfo}`);
         } else {
-          addLog('error', `⚠️ [ERROR] ${res.story_name} - ${res.error}`);
+          addLog('error', `⚠️ [ERROR] ${res.story_name} - ${res.error}${failureTag}${retryInfo}`);
         }
       }
 
-      setActiveRun(result);
+      setActiveRun(result); setLastRunId(result.run_id);
       addLog('info', `Run complete: ${result.passed} passed, ${result.failed} failed in ${result.duration_ms}ms`);
 
-      if (result.failed > 0) {
-        toast.warning(`${result.failed} tests failed. Bug reports generated.`);
-      } else {
-        toast.success(`All ${result.passed} tests passed!`);
+      // #10 Browser notification
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('Nextest — Run Complete', { body: `${result.passed} passed, ${result.failed} failed`, icon: '🧪' });
       }
 
+      if (result.failed > 0) toast.warning(`${result.failed} tests failed. Bug reports generated.`);
+      else toast.success(`All ${result.passed} tests passed!`);
     } catch (err) {
-      setProgress(0);
-      addLog('error', `Execution error: ${err.message}`);
-      toast.error(`Run failed: ${err.message}`);
-    } finally {
-      setRunning(false);
-      setTimeout(() => setProgress(0), 2000);
-    }
+      setProgress(0); addLog('error', `Execution error: ${err.message}`); toast.error(`Run failed: ${err.message}`);
+    } finally { setRunning(false); setTimeout(() => setProgress(0), 2000); }
   };
+
+  // #10 Request notification permission
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
 
   const methodColors = { GET: 'method-GET', POST: 'method-POST', PUT: 'method-PUT', PATCH: 'method-PATCH', DELETE: 'method-DELETE' };
 
-  // Get available role tokens for the selector
   const getAvailableRoleTokens = () => {
     const repoName = localStorage.getItem('nextest_repo_name') || '';
-    try {
-      const allTokens = JSON.parse(localStorage.getItem('nextest_role_tokens') || '{}');
-      const map = allTokens[repoName] || {};
-      return TOKEN_ROLES.filter(r => map[r.key]?.trim());
-    } catch { return []; }
+    try { const allTokens = JSON.parse(localStorage.getItem('nextest_role_tokens') || '{}'); const map = allTokens[repoName] || {}; return TOKEN_ROLES.filter(r => map[r.key]?.trim()); } catch { return []; }
   };
-
   const availableRoles = getAvailableRoleTokens();
 
   return (
     <div className="test-runner animate-fade-in">
-
-      {/* ── Execution Config Panel ── */}
+      {/* Execution Config Panel */}
       <div className="card tr-config-card">
         <div className="card-header" style={{ cursor: 'pointer' }} onClick={() => setConfigOpen(!configOpen)}>
           <div className="flex items-center gap-2">
             <span className="card-title">⚙️ Execution Config</span>
-            {execToken?.trim() && (
-              <span className="badge badge-success" style={{ fontSize: '0.65rem' }}>
-                🔑 Token Set
-              </span>
-            )}
-            {!execToken?.trim() && (
-              <span className="badge badge-error" style={{ fontSize: '0.65rem' }}>
-                ⚠ No Token
-              </span>
-            )}
+            {execToken?.trim() ? <span className="badge badge-success" style={{ fontSize: '0.65rem' }}>🔑 Token Set</span>
+            : <span className="badge badge-error" style={{ fontSize: '0.65rem' }}>⚠ No Token</span>}
           </div>
           <span style={{ fontSize: '18px', transition: 'transform 0.2s', transform: configOpen ? 'rotate(180deg)' : 'rotate(0)' }}>▾</span>
         </div>
@@ -250,66 +224,67 @@ export default function TestRunner() {
         {configOpen && (
           <div className="tr-config-body animate-fade-in">
             <div className="tr-config-grid">
-              {/* Token Section */}
+              {/* Token */}
               <div className="tr-config-section">
                 <div className="flex items-center justify-between" style={{ marginBottom: 'var(--space-2)' }}>
                   <label className="tr-config-label">🔑 Bearer Token</label>
                   {availableRoles.length > 0 && (
                     <div className="flex gap-1">
                       {availableRoles.map(r => (
-                        <button
-                          key={r.key}
-                          className={`tr-role-chip ${selectedRole === r.key ? 'active' : ''}`}
-                          style={{ '--role-color': r.color }}
-                          onClick={() => setSelectedRole(selectedRole === r.key ? '' : r.key)}
-                          title={`Use ${r.label} token`}
-                        >
+                        <button key={r.key} className={`tr-role-chip ${selectedRole === r.key ? 'active' : ''}`} style={{ '--role-color': r.color }} onClick={() => setSelectedRole(selectedRole === r.key ? '' : r.key)} title={`Use ${r.label} token`}>
                           {r.icon} {r.label}
                         </button>
                       ))}
                     </div>
                   )}
                 </div>
-                <textarea
-                  className="input input-mono tr-token-input"
-                  placeholder="Paste your Bearer token here (e.g. Bearer eyJhbGci...)"
-                  value={execToken}
-                  onChange={e => { setExecToken(e.target.value); setSelectedRole(''); }}
-                  rows={2}
-                  disabled={running}
-                  spellCheck={false}
-                />
-                <p className="tr-config-hint">
-                  This token will be used as the <code>Authorization</code> header for all stories without role-specific tokens assigned.
-                </p>
+                <textarea className="input input-mono tr-token-input" placeholder="Paste your Bearer token..." value={execToken} onChange={e => { setExecToken(e.target.value); setSelectedRole(''); }} rows={2} disabled={running} spellCheck={false} />
               </div>
 
-              {/* Headers Section */}
+              {/* Headers */}
               <div className="tr-config-section">
                 <label className="tr-config-label">📋 Custom Headers (JSON)</label>
-                <textarea
-                  className={`input input-mono tr-headers-input ${!headersValid ? 'input-error' : ''}`}
-                  value={customHeadersText}
-                  onChange={e => setCustomHeadersText(e.target.value)}
-                  rows={3}
-                  disabled={running}
-                  spellCheck={false}
-                />
-                {!headersValid && (
-                  <p className="tr-config-error">⚠ Invalid JSON — headers will not be applied</p>
-                )}
-                <p className="tr-config-hint">
-                  These headers are merged with each story's own headers. Story-level headers take priority.
-                </p>
+                <textarea className={`input input-mono tr-headers-input ${!headersValid ? 'input-error' : ''}`} value={customHeadersText} onChange={e => setCustomHeadersText(e.target.value)} rows={3} disabled={running} spellCheck={false} />
+                {!headersValid && <p className="tr-config-error">⚠ Invalid JSON</p>}
+              </div>
+            </div>
+
+            {/* #2, #15, #16 Advanced execution settings */}
+            <div style={{ marginTop: 'var(--space-4)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', background: 'rgba(129,140,248,0.04)', border: '1px solid rgba(129,140,248,0.1)' }}>
+              <label className="tr-config-label" style={{ marginBottom: 'var(--space-2)' }}>🛠 Advanced Settings</label>
+              <div className="flex gap-4 flex-wrap">
+                <div className="flex flex-col gap-1" style={{ minWidth: '100px' }}>
+                  <label style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}>Retries (#2)</label>
+                  <select className="select select-sm" value={retryCount} onChange={e => setRetryCount(parseInt(e.target.value))} disabled={running}>
+                    <option value={0}>No retry</option><option value={1}>1 retry</option><option value={2}>2 retries</option><option value={3}>3 retries</option>
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1" style={{ minWidth: '120px' }}>
+                  <label style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}>Timeout (#15)</label>
+                  <select className="select select-sm" value={timeoutMs} onChange={e => setTimeoutMs(parseInt(e.target.value))} disabled={running}>
+                    <option value={10000}>10s</option><option value={30000}>30s</option><option value={60000}>60s</option><option value={120000}>120s</option>
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1" style={{ minWidth: '120px' }}>
+                  <label style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}>Concurrency (#16)</label>
+                  <select className="select select-sm" value={concurrency} onChange={e => setConcurrency(parseInt(e.target.value))} disabled={running}>
+                    <option value={1}>1 (Sequential)</option><option value={3}>3 Parallel</option><option value={5}>5 Parallel</option><option value={10}>10 Parallel</option>
+                  </select>
+                </div>
+                <div className="flex flex-col gap-1" style={{ minWidth: '120px' }}>
+                  <label style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}>Delay Between</label>
+                  <select className="select select-sm" value={delayMs} onChange={e => setDelayMs(parseInt(e.target.value))} disabled={running}>
+                    <option value={0}>No delay</option><option value={100}>100ms</option><option value={500}>500ms</option><option value={1000}>1s</option>
+                  </select>
+                </div>
               </div>
             </div>
           </div>
         )}
       </div>
 
-      {/* ── Main Layout ── */}
+      {/* Main Layout */}
       <div className="tr-layout">
-
         {/* Stories Selection */}
         <div className="card">
           <div className="card-header" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 'var(--space-4)' }}>
@@ -321,7 +296,7 @@ export default function TestRunner() {
             </div>
             {running && (
                <div style={{ width: '100%', height: '4px', background: 'var(--bg-inset)', borderRadius: '2px', overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${progress}%`, background: 'var(--accent-solid)', transition: 'width 0.3s ease' }} />
+                 <div style={{ height: '100%', width: `${progress}%`, background: 'var(--accent-solid)', transition: 'width 0.3s ease' }} />
                </div>
             )}
           </div>
@@ -332,15 +307,9 @@ export default function TestRunner() {
                 <input type="checkbox" checked={selectedIds.size === filteredStories.length && filteredStories.length > 0} onChange={toggleAll} disabled={running} />
                 <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>Select All</span>
               </label>
-              <select 
-                 className="select select-sm" 
-                 value={selectedTag} 
-                 onChange={e => setSelectedTag(e.target.value)}
-                 disabled={running}
-                 style={{ maxWidth: '150px' }}
-              >
-                 <option value="">All Tags</option>
-                 {allTags.map(t => <option key={t} value={t}>{t}</option>)}
+              <select className="select select-sm" value={selectedTag} onChange={e => setSelectedTag(e.target.value)} disabled={running} style={{ maxWidth: '150px' }}>
+                <option value="">All Tags</option>
+                {allTags.map(t => <option key={t} value={t}>{t}</option>)}
               </select>
             </div>
 
@@ -362,14 +331,7 @@ export default function TestRunner() {
                       <code className="tr-story-endpoint">{s.endpoint}</code>
                       {Array.isArray(storyRoles) && storyRoles.length > 0 && (
                         <div className="flex gap-1" style={{ marginLeft: 'auto' }}>
-                          {storyRoles.map(r => {
-                            const role = TOKEN_ROLES.find(tr => tr.key === r);
-                            return role ? (
-                              <span key={r} style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', background: role.color + '20', color: role.color, fontWeight: 600 }}>
-                                {role.icon} {role.label}
-                              </span>
-                            ) : null;
-                          })}
+                          {storyRoles.map(r => { const role = TOKEN_ROLES.find(tr => tr.key === r); return role ? <span key={r} style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '4px', background: role.color + '20', color: role.color, fontWeight: 600 }}>{role.icon} {role.label}</span> : null; })}
                         </div>
                       )}
                     </div>
@@ -398,7 +360,7 @@ export default function TestRunner() {
               )}
             </div>
 
-            <div className="console tr-console">
+            <div className="console tr-console" ref={consoleRef}>
               {runLogs.length === 0 ? (
                 <div className="console-dim" style={{ textAlign: 'center', marginTop: 'var(--space-8)' }}>
                   Ready to execute. Press "Execute" to begin.
@@ -418,7 +380,6 @@ export default function TestRunner() {
             </div>
           </div>
         </div>
-
       </div>
     </div>
   );

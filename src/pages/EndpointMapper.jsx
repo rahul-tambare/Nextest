@@ -266,12 +266,12 @@ export default function EndpointMapper() {
       {/* Endpoints Table */}
       <div className="card">
         <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', minWidth: 0 }}>
             <span className="card-title">Discovered Endpoints</span>
-            <span className="badge badge-neutral" style={{ marginLeft: 'var(--space-2)' }}>{endpoints.length} found</span>
+            <span className="badge badge-neutral">{endpoints.length} found</span>
           </div>
           {endpoints.length > 0 && (
-            <button className="btn btn-ghost btn-sm" onClick={handleClearEndpoints} style={{ color: 'var(--danger-500)' }}>
+            <button className="btn btn-ghost btn-sm" onClick={handleClearEndpoints} style={{ color: 'var(--danger-500)', flexShrink: 0, position: 'relative', zIndex: 1 }}>
               🗑️ Clear All
             </button>
           )}

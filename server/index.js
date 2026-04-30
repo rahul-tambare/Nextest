@@ -12,6 +12,7 @@ import schemaRouter from './routes/schema.js';
 import proxyRouter from './routes/proxy.js';
 import aiRouter from './routes/ai.js';
 import authRouter from './routes/auth.js';
+import environmentsRouter from './routes/environments.js';
 import { seedDefaultWorkspace } from './seed.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -26,10 +27,69 @@ let PORT = process.env.PORT ? parseInt(process.env.PORT) : 3001;
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
+// #19 Optional Basic Auth for Nextest itself
+const NEXTEST_USER = process.env.NEXTEST_AUTH_USER;
+const NEXTEST_PASS = process.env.NEXTEST_AUTH_PASS;
+
+if (NEXTEST_USER && NEXTEST_PASS) {
+  app.use((req, res, next) => {
+    // Skip health check and static assets
+    if (req.path === '/api/health' || !req.path.startsWith('/api') && !req.path.startsWith('/staging-proxy')) {
+      return next();
+    }
+
+    const authHeader = req.headers['authorization'];
+    // Allow API key auth to bypass basic auth
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      return next();
+    }
+
+    // Check for basic auth
+    const basicAuth = req.headers['x-nextest-auth'];
+    if (basicAuth) {
+      try {
+        const decoded = Buffer.from(basicAuth, 'base64').toString();
+        const [user, pass] = decoded.split(':');
+        if (user === NEXTEST_USER && pass === NEXTEST_PASS) {
+          return next();
+        }
+      } catch {}
+    }
+
+    // Check session token
+    const sessionToken = req.headers['x-nextest-session'];
+    if (sessionToken === Buffer.from(`${NEXTEST_USER}:${NEXTEST_PASS}`).toString('base64')) {
+      return next();
+    }
+
+    // For UI, let the app load and handle auth client-side
+    return next();
+  });
+
+  // Login endpoint
+  app.post('/api/nextest-auth/login', (req, res) => {
+    const { username, password } = req.body;
+    if (username === NEXTEST_USER && password === NEXTEST_PASS) {
+      const sessionToken = Buffer.from(`${username}:${password}`).toString('base64');
+      res.json({ success: true, sessionToken });
+    } else {
+      res.status(401).json({ error: 'Invalid credentials' });
+    }
+  });
+
+  app.get('/api/nextest-auth/check', (req, res) => {
+    res.json({ authRequired: true });
+  });
+} else {
+  app.get('/api/nextest-auth/check', (req, res) => {
+    res.json({ authRequired: false });
+  });
+}
+
 // Workspace Context Middleware
 app.use(async (req, res, next) => {
   // Skip health
-  if (req.path.startsWith('/api/health')) return next();
+  if (req.path.startsWith('/api/health') || req.path.startsWith('/api/nextest-auth')) return next();
 
   try {
     let workspaceId = req.headers['x-workspace-id'];
@@ -88,6 +148,7 @@ app.use('/api/schema', schemaRouter);
 app.use('/staging-proxy', proxyRouter);
 app.use('/api/ai', aiRouter);
 app.use('/api/auth', authRouter);
+app.use('/api/environments', environmentsRouter); // #13
 
 // Serve Static Frontend in Production
 if (process.env.NODE_ENV === 'production') {

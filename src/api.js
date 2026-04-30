@@ -23,14 +23,19 @@ const api = {
   // Health
   health: () => request('/health'),
 
-  // Stories
-  getStories: () => request('/stories'),
+  // Stories — #4 with search/filter support
+  getStories: (params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return request(`/stories${qs ? '?' + qs : ''}`);
+  },
   getStory: (id) => request(`/stories/${id}`),
   createStory: (data) => request('/stories', { method: 'POST', body: JSON.stringify(data) }),
   updateStory: (id, data) => request(`/stories/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-  deleteStory: (id) => request(`/stories/${id}`, { method: 'DELETE' }),
+  deleteStory: (id, hard = false) => request(`/stories/${id}${hard ? '?hard=true' : ''}`, { method: 'DELETE' }),
+  restoreStory: (id) => request(`/stories/${id}/restore`, { method: 'POST' }), // #3
+  importStories: (data) => request('/stories/import', { method: 'POST', body: JSON.stringify(data) }), // #11
 
-  // Runs
+  // Runs — #2, #7, #16
   getRuns: () => request('/runs'),
   getRun: (id) => request(`/runs/${id}`),
   createRun: (data) => request('/runs', { method: 'POST', body: JSON.stringify(data) }),
@@ -39,6 +44,24 @@ const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+
+  // #7 SSE stream for live progress
+  streamRun: (id, onMessage) => {
+    const eventSource = new EventSource(`${BASE}/runs/${id}/stream`);
+    eventSource.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        onMessage(data);
+        if (data.type === 'complete' || data.type === 'error') {
+          eventSource.close();
+        }
+      } catch {}
+    };
+    eventSource.onerror = () => {
+      eventSource.close();
+    };
+    return eventSource;
+  },
 
   // Results
   getResults: (params) => {
@@ -64,15 +87,15 @@ const api = {
   getSchemaTables: () => request('/schema/tables'),
   getSchemaTable: (name) => request(`/schema/tables/${name}`),
 
-  // Staging proxy
-  proxyRequest: ({ method, url, headers, body, token }) =>
+  // Staging proxy — #15 with timeout
+  proxyRequest: ({ method, url, headers, body, token, timeout }) =>
     fetch('/staging-proxy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ method, url, headers, body, token }),
+      body: JSON.stringify({ method, url, headers, body, token, timeout }),
     }).then(async (res) => {
       const data = await res.json().catch(() => null);
-      return { status: res.status, data, proxyStatus: data?.proxyStatus };
+      return { status: res.status, data, proxyStatus: data?.proxyStatus, proxyTime: data?.proxyTime, requestSnapshot: data?.requestSnapshot };
     }),
 
   // AI Generation
@@ -81,6 +104,17 @@ const api = {
   // Auth Token Generation
   sendOtp: ({ mobile, role }) => request('/auth/send-otp', { method: 'POST', body: JSON.stringify({ mobile, role }) }),
   verifyOtp: ({ mobile, role, otp }) => request('/auth/verify-otp', { method: 'POST', body: JSON.stringify({ mobile, role, otp }) }),
+
+  // #13 Environments
+  getEnvironments: () => request('/environments'),
+  getEnvironment: (id) => request(`/environments/${id}`),
+  createEnvironment: (data) => request('/environments', { method: 'POST', body: JSON.stringify(data) }),
+  updateEnvironment: (id, data) => request(`/environments/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  deleteEnvironment: (id) => request(`/environments/${id}`, { method: 'DELETE' }),
+
+  // #19 Nextest Auth
+  checkAuth: () => request('/nextest-auth/check'),
+  login: (username, password) => request('/nextest-auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
 };
 
 export default api;

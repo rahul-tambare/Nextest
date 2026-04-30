@@ -171,8 +171,40 @@
 @media (max-width: 1200px) { .grid-cols-4 { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 900px) {
   .grid-cols-3, .grid-cols-2, .grid-cols-4 { grid-template-columns: 1fr; }
-  .sidebar { position: fixed; left: -100%; }
-  .sidebar.mobile-open { left: 0; }
+}
+
+/* #20 Mobile responsive */
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    left: -100%;
+    transition: left 0.3s ease;
+    z-index: 1000;
+  }
+  .sidebar:not(.collapsed) {
+    left: 0;
+    box-shadow: 4px 0 24px rgba(0,0,0,0.4);
+  }
+  .content-area {
+    padding: var(--space-3);
+  }
+  .app-header {
+    padding: 0 var(--space-3);
+  }
+  .page-title {
+    font-size: var(--text-base);
+  }
+  .modal {
+    max-width: 95vw !important;
+    margin: var(--space-3) !important;
+    max-height: 90vh;
+  }
+  .tr-layout, .th-layout {
+    grid-template-columns: 1fr !important;
+  }
+  .tr-config-grid {
+    grid-template-columns: 1fr !important;
+  }
 }
 
 /* ── Section spacing ── */

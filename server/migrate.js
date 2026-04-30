@@ -102,6 +102,19 @@ const initialTables = [
     source_file VARCHAR(500),
     parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+  )`,
+
+  // #13 Environment Profiles
+  `CREATE TABLE IF NOT EXISTS environments (
+    id VARCHAR(36) PRIMARY KEY,
+    workspace_id VARCHAR(36) NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    base_url VARCHAR(500),
+    variables JSON,
+    is_default BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
   )`
 ];
 
@@ -137,6 +150,30 @@ export async function runMigrations() {
 
   // 3. Token roles per story
   await addColumnIfNotExists('test_stories', 'token_roles', 'JSON DEFAULT NULL');
+
+  // 4. #3 Soft delete for stories
+  await addColumnIfNotExists('test_stories', 'deleted_at', 'TIMESTAMP NULL DEFAULT NULL');
+
+  // 5. #12 Test dependencies — depends_on references another story_id
+  await addColumnIfNotExists('test_stories', 'depends_on', 'VARCHAR(36) DEFAULT NULL');
+  await addColumnIfNotExists('test_stories', 'priority', 'INT DEFAULT 0');
+
+  // 6. #15 Per-story timeout
+  await addColumnIfNotExists('test_stories', 'timeout_ms', 'INT DEFAULT 30000');
+
+  // 7. #14 Request snapshot in test_results (stores full request that was sent)
+  await addColumnIfNotExists('test_results', 'request_snapshot', 'JSON DEFAULT NULL');
+
+  // 8. #2 Retry info in test_results
+  await addColumnIfNotExists('test_results', 'retry_count', 'INT DEFAULT 0');
+  await addColumnIfNotExists('test_results', 'failure_type', "VARCHAR(50) DEFAULT NULL");
+
+  // 9. #16 Execution config on test_runs
+  await addColumnIfNotExists('test_runs', 'concurrency', 'INT DEFAULT 3');
+  await addColumnIfNotExists('test_runs', 'retry_count', 'INT DEFAULT 1');
+
+  // 10. #13 Environment reference on test_runs
+  await addColumnIfNotExists('test_runs', 'environment_id', 'VARCHAR(36) DEFAULT NULL');
 
   console.log(`   → Multi-tenancy schema migration complete`);
 }
