@@ -443,11 +443,12 @@ export default function StoryEditor() {
                       <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
                       <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
                       <option value="claude-3-5-haiku-20241022">Claude 3.5 Haiku</option>
-                      <option value="deepseek-chat">Deepseek V3</option>
-                      <option value="deepseek-reasoner">Deepseek R1</option>
                       <option value="gpt-4o">GPT-4o</option>
-                      <option value="gpt-4o-mini">GPT-4o Mini</option>
-                      <option disabled>── Free Options ──</option>
+                      <option disabled>── 💰 Low Pricing ──</option>
+                      <option value="deepseek-chat">Deepseek V3 ($0.27/M)</option>
+                      <option value="deepseek-reasoner">Deepseek R1 ($0.55/M)</option>
+                      <option value="gpt-4o-mini">GPT-4o Mini ($0.15/M)</option>
+                      <option disabled>── 🆓 Free Options ──</option>
                       <option value="groq-llama-3.3-70b-versatile">Groq Llama 3.3 70B (Fast)</option>
                       <option value="groq-llama-3.1-8b-instant">Groq Llama 3.1 8B (Fast)</option>
                     </select>
