@@ -4,10 +4,10 @@ import api from '../api.js';
 import './TokenManager.css';
 
 const TOKEN_ROLES = [
-  { key: 'admin', label: 'Admin', icon: '👑', color: '#f59e0b', desc: 'Full admin access with elevated privileges' },
-  { key: 'loyalty', label: 'Loyalty', icon: '💎', color: '#8b5cf6', desc: 'Loyalty program member context' },
-  { key: 'buyer', label: 'Buyer', icon: '🛒', color: '#06b6d4', desc: 'Consumer / buyer role context' },
-  { key: 'seller', label: 'Seller', icon: '🏪', color: '#10b981', desc: 'Merchant / seller role context' },
+  { key: 'admin', label: 'Admin', icon: '👑', color: '#f59e0b', desc: 'Full admin access with elevated privileges', canGenerate: false },
+  { key: 'loyalty', label: 'Loyalty', icon: '💎', color: '#8b5cf6', desc: 'Loyalty program member context', canGenerate: true, clientName: 'Loyalty_Android' },
+  { key: 'buyer', label: 'Buyer', icon: '🛒', color: '#06b6d4', desc: 'Consumer / buyer role context', canGenerate: true, clientName: 'Buyer_Android' },
+  { key: 'seller', label: 'Seller', icon: '🏪', color: '#10b981', desc: 'Merchant / seller role context', canGenerate: true, clientName: 'Seller_Android' },
 ];
 
 function decodeJWT(token) {
@@ -50,6 +50,13 @@ export default function TokenManager() {
   const [validationUrl, setValidationUrl] = useState(
     localStorage.getItem('nextest_staging_base_url') || 'http://localhost:8080'
   );
+
+  // OTP Generation State
+  const [genModal, setGenModal] = useState(null); // null or { role, step }
+  const [genMobile, setGenMobile] = useState(() => localStorage.getItem('nextest_gen_mobile') || '');
+  const [genOtp, setGenOtp] = useState('');
+  const [genLoading, setGenLoading] = useState(false);
+  const [genResult, setGenResult] = useState(null);
 
   const saveTokens = useCallback((updated) => {
     try {
@@ -123,6 +130,56 @@ export default function TokenManager() {
       navigator.clipboard.writeText(val).then(() => toast.success('Token copied!'));
     }
   }, [roleTokens, toast]);
+
+  // ── Token Generation Flow ──
+  const openGenerateModal = (roleKey) => {
+    setGenModal({ role: roleKey, step: 'mobile' });
+    setGenOtp('');
+    setGenResult(null);
+  };
+
+  const handleSendOtp = async () => {
+    if (!genMobile.trim()) {
+      toast.error('Please enter a mobile number');
+      return;
+    }
+    localStorage.setItem('nextest_gen_mobile', genMobile);
+    setGenLoading(true);
+    try {
+      const result = await api.sendOtp({ mobile: genMobile, role: genModal.role });
+      setGenResult(result);
+      setGenModal(prev => ({ ...prev, step: 'otp' }));
+      toast.success(result.message || 'OTP sent successfully');
+    } catch (err) {
+      toast.error(`Failed to send OTP: ${err.message}`);
+    } finally {
+      setGenLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    if (!genOtp.trim()) {
+      toast.error('Please enter the OTP');
+      return;
+    }
+    setGenLoading(true);
+    try {
+      const result = await api.verifyOtp({ mobile: genMobile, role: genModal.role, otp: genOtp });
+      if (result.idToken) {
+        // Auto-set the IdToken as the role's token
+        handleTokenChange(genModal.role, result.idToken);
+        setGenModal(null);
+        setExpandedRole(genModal.role);
+        toast.success(`✅ ${genModal.role.toUpperCase()} token generated and applied!`);
+      } else {
+        toast.error('No IdToken received from verification');
+      }
+    } catch (err) {
+      toast.error(`Verification failed: ${err.message}`);
+    } finally {
+      setGenLoading(false);
+    }
+  };
 
   if (!repoName) {
     return (
@@ -259,9 +316,27 @@ export default function TokenManager() {
                     <span style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}>{role.desc}</span>
                   </div>
                 </div>
-                <span style={{ fontSize: '14px', color: 'var(--text-tertiary)', transition: 'transform 0.2s', transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>
-                  ▼
-                </span>
+                <div className="flex items-center gap-2">
+                  {/* Generate Button for non-admin roles */}
+                  {role.canGenerate && (
+                    <button
+                      className="btn btn-sm"
+                      onClick={(e) => { e.stopPropagation(); openGenerateModal(role.key); }}
+                      style={{
+                        background: role.color + '18',
+                        color: role.color,
+                        border: `1px solid ${role.color}40`,
+                        fontWeight: 600,
+                        fontSize: '11px',
+                      }}
+                    >
+                      ⚡ Generate
+                    </button>
+                  )}
+                  <span style={{ fontSize: '14px', color: 'var(--text-tertiary)', transition: 'transform 0.2s', transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+                    ▼
+                  </span>
+                </div>
               </div>
 
               {/* Expandable Body */}
@@ -269,7 +344,12 @@ export default function TokenManager() {
                 <div className="tm-role-body animate-slide-up">
                   {/* Token Input */}
                   <div className="form-group" style={{ marginBottom: 'var(--space-4)' }}>
-                    <label className="form-label" style={{ fontSize: '11px' }}>Bearer Token</label>
+                    <label className="form-label" style={{ fontSize: '11px' }}>
+                      Bearer Token
+                      {role.canGenerate && (
+                        <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}> — paste manually or use ⚡ Generate</span>
+                      )}
+                    </label>
                     <div className="flex gap-2">
                       <textarea
                         className="textarea input-mono"
@@ -371,6 +451,127 @@ export default function TokenManager() {
           );
         })}
       </div>
+
+      {/* ── Generate Token Modal ── */}
+      {genModal && (
+        <div className="modal-overlay">
+          <div className="modal" style={{ maxWidth: '460px' }}>
+            <div className="modal-header">
+              <div className="flex items-center gap-2">
+                <span style={{ fontSize: '1.2rem' }}>{TOKEN_ROLES.find(r => r.key === genModal.role)?.icon}</span>
+                <span className="modal-title">
+                  Generate {TOKEN_ROLES.find(r => r.key === genModal.role)?.label} Token
+                </span>
+              </div>
+              <button className="btn btn-ghost btn-icon" onClick={() => setGenModal(null)}>✕</button>
+            </div>
+
+            {/* Step Indicator */}
+            <div className="tm-gen-steps">
+              <div className={`tm-gen-step ${genModal.step === 'mobile' ? 'active' : genModal.step === 'otp' ? 'done' : ''}`}>
+                <span className="tm-gen-step-num">1</span>
+                <span className="tm-gen-step-label">Send OTP</span>
+              </div>
+              <div className="tm-gen-step-line" />
+              <div className={`tm-gen-step ${genModal.step === 'otp' ? 'active' : ''}`}>
+                <span className="tm-gen-step-num">2</span>
+                <span className="tm-gen-step-label">Verify</span>
+              </div>
+            </div>
+
+            {genModal.step === 'mobile' && (
+              <div style={{ padding: '0 var(--space-5) var(--space-5)' }}>
+                <div className="form-group" style={{ marginBottom: 'var(--space-4)' }}>
+                  <label className="form-label">Mobile Number</label>
+                  <input
+                    className="input input-mono"
+                    value={genMobile}
+                    onChange={(e) => setGenMobile(e.target.value)}
+                    placeholder="e.g. 7057189303"
+                    style={{ fontSize: '14px', letterSpacing: '1px' }}
+                    autoFocus
+                  />
+                </div>
+                <div className="form-group" style={{ marginBottom: 'var(--space-4)' }}>
+                  <label className="form-label" style={{ fontSize: '11px', color: 'var(--text-tertiary)' }}>Client Name</label>
+                  <div style={{
+                    padding: 'var(--space-2) var(--space-3)',
+                    background: 'var(--bg-inset)',
+                    borderRadius: 'var(--radius-md)',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: '12px',
+                    color: TOKEN_ROLES.find(r => r.key === genModal.role)?.color,
+                    fontWeight: 600,
+                  }}>
+                    {TOKEN_ROLES.find(r => r.key === genModal.role)?.clientName}
+                  </div>
+                </div>
+                <button
+                  className="btn btn-primary"
+                  style={{ width: '100%' }}
+                  onClick={handleSendOtp}
+                  disabled={genLoading || !genMobile.trim()}
+                >
+                  {genLoading ? <><span className="spinner" /> Sending OTP...</> : '📱 Send OTP'}
+                </button>
+              </div>
+            )}
+
+            {genModal.step === 'otp' && (
+              <div style={{ padding: '0 var(--space-5) var(--space-5)' }}>
+                <div style={{
+                  padding: 'var(--space-3)',
+                  background: 'rgba(52, 211, 153, 0.08)',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid rgba(52, 211, 153, 0.2)',
+                  fontSize: '12px',
+                  color: '#34d399',
+                  marginBottom: 'var(--space-4)',
+                  textAlign: 'center',
+                }}>
+                  ✅ OTP sent to <strong>{genMobile}</strong>
+                  {genResult?.testOtp !== undefined && genResult?.testOtp !== null && (
+                    <span style={{ display: 'block', marginTop: '4px', fontSize: '11px', color: 'var(--text-tertiary)' }}>
+                      Test OTP: <strong style={{ color: 'var(--accent-solid)' }}>{genResult.testOtp}</strong>
+                    </span>
+                  )}
+                </div>
+
+                <div className="form-group" style={{ marginBottom: 'var(--space-4)' }}>
+                  <label className="form-label">Enter OTP</label>
+                  <input
+                    className="input input-mono"
+                    value={genOtp}
+                    onChange={(e) => setGenOtp(e.target.value)}
+                    placeholder="Enter OTP code"
+                    style={{ fontSize: '18px', letterSpacing: '6px', textAlign: 'center', fontWeight: 700 }}
+                    autoFocus
+                    maxLength={6}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    className="btn btn-ghost"
+                    style={{ flex: 1 }}
+                    onClick={() => setGenModal(prev => ({ ...prev, step: 'mobile' }))}
+                    disabled={genLoading}
+                  >
+                    ← Back
+                  </button>
+                  <button
+                    className="btn btn-primary"
+                    style={{ flex: 2 }}
+                    onClick={handleVerifyOtp}
+                    disabled={genLoading || !genOtp.trim()}
+                  >
+                    {genLoading ? <><span className="spinner" /> Verifying...</> : '✅ Verify & Set Token'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

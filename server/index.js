@@ -11,6 +11,7 @@ import endpointsRouter from './routes/endpoints.js';
 import schemaRouter from './routes/schema.js';
 import proxyRouter from './routes/proxy.js';
 import aiRouter from './routes/ai.js';
+import authRouter from './routes/auth.js';
 import { seedDefaultWorkspace } from './seed.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -86,6 +87,7 @@ app.use('/api/endpoints', endpointsRouter);
 app.use('/api/schema', schemaRouter);
 app.use('/staging-proxy', proxyRouter);
 app.use('/api/ai', aiRouter);
+app.use('/api/auth', authRouter);
 
 // Serve Static Frontend in Production
 if (process.env.NODE_ENV === 'production') {

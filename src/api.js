@@ -73,6 +73,10 @@ const api = {
 
   // AI Generation
   generateAIContext: (payload) => request('/ai/generate', { method: 'POST', body: JSON.stringify(payload) }),
+
+  // Auth Token Generation
+  sendOtp: ({ mobile, role }) => request('/auth/send-otp', { method: 'POST', body: JSON.stringify({ mobile, role }) }),
+  verifyOtp: ({ mobile, role, otp }) => request('/auth/verify-otp', { method: 'POST', body: JSON.stringify({ mobile, role, otp }) }),
 };
 
 export default api;

@@ -107,3 +107,74 @@
   color: var(--text-secondary);
   word-break: break-all;
 }
+
+/* Generate Token Modal Steps */
+.tm-gen-steps {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: var(--space-4) var(--space-5);
+}
+
+.tm-gen-step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  opacity: 0.4;
+  transition: opacity 0.2s ease;
+}
+
+.tm-gen-step.active {
+  opacity: 1;
+}
+
+.tm-gen-step.done {
+  opacity: 0.7;
+}
+
+.tm-gen-step-num {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--bg-inset);
+  border: 2px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-tertiary);
+  transition: all 0.2s ease;
+}
+
+.tm-gen-step.active .tm-gen-step-num {
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
+  color: #fff;
+  box-shadow: 0 0 12px rgba(129, 140, 248, 0.35);
+}
+
+.tm-gen-step.done .tm-gen-step-num {
+  background: rgba(52, 211, 153, 0.2);
+  border-color: #34d399;
+  color: #34d399;
+}
+
+.tm-gen-step-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+}
+
+.tm-gen-step.active .tm-gen-step-label {
+  color: var(--text-primary);
+}
+
+.tm-gen-step-line {
+  width: 40px;
+  height: 2px;
+  background: var(--border-subtle);
+  margin: 0 var(--space-2);
+}
+
