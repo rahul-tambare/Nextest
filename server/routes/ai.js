@@ -115,8 +115,85 @@ router.post('/generate', async (req, res) => {
     
     let prompt;
     const roleString = token_roles && token_roles.length > 0 ? token_roles.join(', ') : 'Default/None';
-    if (test_cases && test_cases.trim() !== '') {
-      prompt = `
+    const useCachePrompt = req.body.use_cache_prompt === true;
+
+    if (useCachePrompt) {
+      if (test_cases && test_cases.trim() !== '') {
+        prompt = `
+<codebase_context>
+${codeContext}
+</codebase_context>
+
+<database_schema>
+${dbContext}
+</database_schema>
+
+You are a Senior QA Automation Engineer.
+We need to test the API endpoint: ${method} ${endpoint}
+
+USER ROLE CONTEXT: The request will be executed by users with these roles: ${roleString}.
+
+The user has requested the following test cases to be generated:
+${test_cases}
+
+Analyze the code and the requested test cases. Generate a payload for EACH requested test case.
+CRITICAL VALIDATION INSTRUCTION: Look very carefully for any validation schemas (Joi, Yup, Zod, express-validator, etc.) in the provided code context. 
+If a schema exists for this endpoint, you MUST include ALL required fields in your request_body (e.g. nested objects like "pagination": {"fetchLimit": 10}). Failure to include required schema fields will result in 400 Bad Request errors.
+
+For each test case, determine:
+1. What is the expected request body (JSON)? Ensure all schema constraints and required fields are satisfied.
+2. What is the expected HTTP success/error status code?
+3. A short, descriptive story name.
+4. Appropriate tags.
+
+Respond ONLY with a valid JSON ARRAY of objects matching this exact schema:
+[
+  {
+    "name": "Story Name",
+    "expected_status": 200,
+    "request_body": { ... },
+    "tags": ["tag1", "tag2"]
+  }
+]
+Do not wrap in markdown \`\`\`json block. Just pure JSON.
+`;
+      } else {
+        prompt = `
+<codebase_context>
+${codeContext}
+</codebase_context>
+
+<database_schema>
+${dbContext}
+</database_schema>
+
+You are a Senior QA Automation Engineer.
+We need to test the API endpoint: ${method} ${endpoint}
+
+USER ROLE CONTEXT: The request will be executed by users with these roles: ${roleString}. Keep this in mind when determining what data is appropriate.
+
+Analyze the code and determine a default, successful test case:
+CRITICAL VALIDATION INSTRUCTION: Look very carefully for any validation schemas (Joi, Yup, Zod, express-validator, etc.) in the provided code context. 
+If a schema exists for this endpoint, you MUST include ALL required fields in your request_body (e.g. nested objects like "pagination": {"fetchLimit": 10}). Failure to include required schema fields will result in 400 Bad Request errors.
+
+1. What is the expected request body (JSON)? Make it a realistic, valid payload that completely satisfies all schema requirements for a successful request.
+2. What is the expected HTTP success status code?
+3. A short, descriptive story name.
+4. Appropriate tags.
+
+Respond ONLY with a valid JSON object matching this exact schema:
+{
+  "name": "Story Name",
+  "expected_status": 200,
+  "request_body": { ... },
+  "tags": ["tag1", "tag2"]
+}
+Do not wrap in markdown \`\`\`json block. Just pure JSON.
+`;
+      }
+    } else {
+      if (test_cases && test_cases.trim() !== '') {
+        prompt = `
 You are a Senior QA Automation Engineer.
 We need to test the API endpoint: ${method} ${endpoint}
 
@@ -150,8 +227,8 @@ Respond ONLY with a valid JSON ARRAY of objects matching this exact schema:
 ]
 Do not wrap in markdown \`\`\`json block. Just pure JSON.
 `;
-    } else {
-      prompt = `
+      } else {
+        prompt = `
 You are a Senior QA Automation Engineer.
 We need to test the API endpoint: ${method} ${endpoint}
 
@@ -179,6 +256,7 @@ Respond ONLY with a valid JSON object matching this exact schema:
 }
 Do not wrap in markdown \`\`\`json block. Just pure JSON.
 `;
+      }
     }
 
     const aiModel = model || 'gemini-2.5-flash';
@@ -342,7 +420,42 @@ router.post('/analyze-failure', async (req, res) => {
     }
     const localContext = codeContext + '\n' + dbContext;
 
-    const prompt = `
+    const useCachePrompt = req.body.use_cache_prompt === true;
+    let prompt;
+
+    if (useCachePrompt) {
+      prompt = `
+<codebase_context>
+${localContext}
+</codebase_context>
+
+You are an expert Backend QA Engineer. A test just failed in the Nextest API platform.
+Analyze the API failure using the provided codebase context and the request details.
+
+TEST EXECUTION DETAILS:
+Method: ${method}
+Endpoint: ${endpoint}
+User Roles: ${token_roles && token_roles.length > 0 ? token_roles.join(', ') : 'Default/None'}
+Request Headers: ${request_headers || '{}'}
+Request Body: ${request_body || '{}'}
+
+EXPECTED STATUS: ${expected_status}
+ACTUAL STATUS: ${response_status}
+
+ERROR RESPONSE BODY:
+${response_body}
+
+Analyze WHY the API returned this error response instead of the expected status.
+Look for mismatches between the Request Body/Headers and what the Code Context requires.
+
+Return ONLY a valid JSON object matching this schema exactly, with NO markdown formatting:
+{
+  "rootCause": "Short 1-sentence summary of the main issue",
+  "explanation": "Detailed explanation of why the API rejected the request based on the code context",
+  "suggestedFix": "Clear instructions on how to fix the Request Body or Headers to make it pass"
+}`;
+    } else {
+      prompt = `
 You are an expert Backend QA Engineer. A test just failed in the Nextest API platform.
 Analyze the API failure using the provided codebase context and the request details.
 
@@ -371,6 +484,7 @@ Return ONLY a valid JSON object matching this schema exactly, with NO markdown f
   "explanation": "Detailed explanation of why the API rejected the request based on the code context",
   "suggestedFix": "Clear instructions on how to fix the Request Body or Headers to make it pass"
 }`;
+    }
 
     let resultText = '';
 

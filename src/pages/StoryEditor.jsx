@@ -73,6 +73,8 @@ export default function StoryEditor() {
   const [saving, setSaving] = useState(false);
   const [generatingAI, setGeneratingAI] = useState(false);
   const [aiModel, setAiModel] = useState(localStorage.getItem('nextest_ai_model') || 'gemini-2.5-flash');
+  const [aiTestCases, setAiTestCases] = useState([]);
+  const [expandedGroups, setExpandedGroups] = useState({});
 
   // Inline Test State
   const [testing, setTesting] = useState(false);
@@ -81,6 +83,11 @@ export default function StoryEditor() {
   const [aiFixing, setAiFixing] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState(null);
   const [analyzing, setAnalyzing] = useState(false);
+
+  // Quick Test from story list
+  const [quickTestingId, setQuickTestingId] = useState(null);
+  const [quickTestResults, setQuickTestResults] = useState({});
+  const [expandedStoryId, setExpandedStoryId] = useState(null);
 
   useEffect(() => {
     loadData();
@@ -104,6 +111,7 @@ export default function StoryEditor() {
   const handleCreate = () => {
     setActiveStory(null);
     setFormData(DEFAULT_STORY);
+    setAiTestCases([]);
     setIsModalOpen(true);
   };
 
@@ -120,6 +128,7 @@ export default function StoryEditor() {
       tags: typeof story.tags === 'string' ? story.tags : JSON.stringify(story.tags, null, 2),
       token_roles: Array.isArray(parsedTokenRoles) ? parsedTokenRoles : [],
     });
+    setAiTestCases([]);
     setIsModalOpen(true);
   };
 
@@ -209,7 +218,7 @@ export default function StoryEditor() {
     } catch { return []; }
   };
 
-  const handleAIGenerate = async () => {
+  const handleAIGenerate = async (useCachePrompt = false) => {
     const p = localStorage.getItem('nextest_repo_path');
     if (!p) {
       toast.error('Please configure your Global Repository Path on the Dashboard first.');
@@ -221,6 +230,7 @@ export default function StoryEditor() {
     }
     
     setGeneratingAI(true);
+    setAiTestCases([]);
     
     try {
       const result = await api.generateAIContext({
@@ -229,22 +239,24 @@ export default function StoryEditor() {
         repo_path: p,
         test_cases: formData.test_cases,
         token_roles: formData.token_roles || [],
-        model: aiModel
+        model: aiModel,
+        use_cache_prompt: useCachePrompt
       });
       
-      let firstResult = result;
-      let additionalResults = [];
+      let allResults = [];
       
       if (Array.isArray(result)) {
-        if (result.length > 0) {
-          firstResult = result[0];
-          additionalResults = result.slice(1);
-        } else {
+        if (result.length === 0) {
           toast.error("AI returned an empty list of test cases.");
           return;
         }
+        allResults = result;
+      } else {
+        allResults = [result];
       }
 
+      // Load the first result into the form
+      const firstResult = allResults[0];
       setFormData(prev => ({
         ...prev,
         name: firstResult.name || prev.name,
@@ -253,22 +265,10 @@ export default function StoryEditor() {
         tags: firstResult.tags ? JSON.stringify(firstResult.tags, null, 2) : prev.tags
       }));
 
-      if (additionalResults.length > 0) {
-        let headers = null;
-        try { headers = formData.request_headers ? JSON.parse(formData.request_headers) : null; } catch {}
-        
-        for (const item of additionalResults) {
-          await api.createStory({
-            ...formData,
-            name: item.name,
-            expected_status: parseInt(item.expected_status, 10) || 200,
-            request_body: item.request_body,
-            request_headers: headers,
-            tags: item.tags || []
-          });
-        }
-        loadData();
-        toast.success(`AI generated payload & automatically saved ${additionalResults.length} additional test cases!`);
+      // Store ALL test cases (including first) in the list for easy switching
+      if (allResults.length > 1) {
+        setAiTestCases(allResults);
+        toast.success(`AI generated ${allResults.length} test cases! Click any to load it, then Save.`);
       } else {
         toast.success('AI successfully generated the payload & metadata!');
       }
@@ -280,6 +280,74 @@ export default function StoryEditor() {
   };
 
 
+  // ── Quick Test from Story List ──
+  const handleQuickTest = async (story) => {
+    const baseUrl = localStorage.getItem('nextest_staging_base_url') || '';
+    if (!baseUrl) {
+      toast.error('No Base Path URL configured. Set it on the Dashboard first.');
+      return;
+    }
+
+    // Resolve token
+    let tokenToUse = sessionStorage.getItem('nextest_auth_token') || '';
+    try {
+      const repoName = localStorage.getItem('nextest_repo_name') || '';
+      const allTokens = JSON.parse(localStorage.getItem('nextest_role_tokens') || '{}');
+      const repoTokens = allTokens[repoName] || {};
+      let roles = story.token_roles || [];
+      if (typeof roles === 'string') { try { roles = JSON.parse(roles); } catch { roles = []; } }
+      if (Array.isArray(roles) && roles.length > 0 && repoTokens[roles[0]]) {
+        tokenToUse = repoTokens[roles[0]];
+      } else {
+        const vals = Object.values(repoTokens).filter(v => v?.trim());
+        if (vals.length > 0 && !tokenToUse) tokenToUse = vals[0];
+      }
+    } catch {}
+
+    if (!tokenToUse) {
+      toast.error('No token available. Configure tokens on Dashboard.');
+      return;
+    }
+
+    let bodyObj = null;
+    let headersObj = {};
+    try {
+      const rb = typeof story.request_body === 'string' ? story.request_body : JSON.stringify(story.request_body || {});
+      if (rb && rb.trim() !== '{}') bodyObj = JSON.parse(rb);
+    } catch {}
+    try {
+      const rh = typeof story.request_headers === 'string' ? story.request_headers : JSON.stringify(story.request_headers || {});
+      headersObj = JSON.parse(rh);
+    } catch {}
+
+    setQuickTestingId(story.id);
+    try {
+      const url = baseUrl.replace(/\/$/, '') + story.endpoint;
+      const result = await api.proxyRequest({
+        method: story.method,
+        url,
+        headers: headersObj,
+        body: bodyObj,
+        token: tokenToUse,
+      });
+      const passed = result.proxyStatus === parseInt(story.expected_status, 10);
+      setQuickTestResults(prev => ({ ...prev, [story.id]: {
+        status: result.proxyStatus,
+        time: result.proxyTime || result.data?.proxyTime,
+        ok: passed,
+      }}));
+      if (passed) {
+        toast.success(`✅ ${story.name} — HTTP ${result.proxyStatus} (${result.proxyTime}ms)`);
+      } else {
+        toast.warning(`⚠ ${story.name} — HTTP ${result.proxyStatus} (expected ${story.expected_status})`);
+      }
+    } catch (err) {
+      setQuickTestResults(prev => ({ ...prev, [story.id]: { status: 'err', time: 0, ok: false }}));
+      toast.error(`Test failed: ${err.message}`);
+    } finally {
+      setQuickTestingId(null);
+    }
+  };
 
   // ── Inline Test Request ──
   const handleTestRequest = async () => {
@@ -374,6 +442,7 @@ export default function StoryEditor() {
         model: aiModel,
         token_roles: formData.token_roles || [],
         test_cases: `The API returned HTTP ${testResult.status} with this error response:\n${errorContext}\n\nThe original request body was:\n${formData.request_body}\n\nPlease analyze the error and fix the request body to make a successful request. Return ONLY one corrected test case.`,
+        use_cache_prompt: true,
       });
 
       let fixed = result;
@@ -425,6 +494,7 @@ export default function StoryEditor() {
           response_body: responseBody,
           expected_status: formData.expected_status,
           token_roles: formData.token_roles || [],
+          use_cache_prompt: true,
         }),
       });
       const data = await resp.json();
@@ -436,6 +506,65 @@ export default function StoryEditor() {
     } finally {
       setAnalyzing(false);
     }
+  };
+
+  // Helper: parse roles from story
+  const parseRoles = (story) => {
+    let roles = story.token_roles || [];
+    if (typeof roles === 'string') { try { roles = JSON.parse(roles); } catch { roles = []; } }
+    return Array.isArray(roles) ? roles : [];
+  };
+
+  // Helper: render expandable detail panel for a story
+  const renderStoryDetail = (story) => {
+    if (expandedStoryId !== story.id) return null;
+    const roles = parseRoles(story);
+    let headersObj = {};
+    try {
+      const rh = typeof story.request_headers === 'string' ? story.request_headers : JSON.stringify(story.request_headers || {});
+      headersObj = JSON.parse(rh);
+    } catch {}
+    const headerKeys = Object.keys(headersObj).filter(k => k !== 'Content-Type' && k !== 'Authorization');
+    let bodyStr = '';
+    try {
+      bodyStr = typeof story.request_body === 'string' ? story.request_body : JSON.stringify(story.request_body || {}, null, 2);
+    } catch {}
+
+    return (
+      <div className="se-detail-panel animate-slide-up">
+        <div className="se-detail-row">
+          <span className="se-detail-label">🔐 Token Roles</span>
+          <div className="flex gap-2 flex-wrap">
+            {roles.length > 0 ? roles.map(r => {
+              const role = TOKEN_ROLES.find(tr => tr.key === r);
+              return role ? (
+                <span key={r} className="chip" style={{ background: role.color + '20', color: role.color, border: `1px solid ${role.color}40`, fontSize: '10px' }}>
+                  {role.icon} {role.label}
+                </span>
+              ) : <span key={r} className="chip" style={{ fontSize: '10px' }}>{r}</span>;
+            }) : <span style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}>Default session token</span>}
+          </div>
+        </div>
+        {headerKeys.length > 0 && (
+          <div className="se-detail-row">
+            <span className="se-detail-label">📨 Custom Headers</span>
+            <div className="flex gap-2 flex-wrap">
+              {headerKeys.map(k => (
+                <span key={k} className="chip" style={{ fontSize: '9px', fontFamily: 'var(--font-mono, monospace)' }}>
+                  {k}: {String(headersObj[k]).substring(0, 20)}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+        {bodyStr && bodyStr !== '{}' && bodyStr !== 'null' && (
+          <div className="se-detail-row">
+            <span className="se-detail-label">📦 Request Body</span>
+            <pre className="se-detail-body"><code>{bodyStr.length > 200 ? bodyStr.substring(0, 200) + '...' : bodyStr}</code></pre>
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -450,44 +579,167 @@ export default function StoryEditor() {
           <div className="empty-state" style={{ padding: 'var(--space-8)' }}><span className="spinner" /></div>
         ) : stories.length > 0 ? (
           <div className="se-grid">
-            {stories.map((story) => (
-              <div key={story.id} className="card se-story-card">
-                <div className="se-story-header">
-                  <div className="se-story-title">
-                    <span className={`method ${methodColors[story.method] || ''}`}>{story.method}</span>
-                    <span className="se-story-name truncate">{story.name}</span>
+            {(() => {
+              // Group stories by method+endpoint
+              const grouped = {};
+              stories.forEach(story => {
+                const key = `${story.method}::${story.endpoint}`;
+                if (!grouped[key]) grouped[key] = [];
+                grouped[key].push(story);
+              });
+
+              return Object.entries(grouped).map(([groupKey, group]) => {
+                const main = group[0];
+                const subs = group.slice(1);
+                const isExpanded = expandedGroups[groupKey] !== false; // default expanded
+
+                return (
+                  <div key={groupKey} className="se-story-group">
+                    {/* Main Story Card */}
+                    <div className="card se-story-card">
+                      <div className="se-story-header">
+                        <div className="se-story-title">
+                          <span className={`method ${methodColors[main.method] || ''}`}>{main.method}</span>
+                          <span className="se-story-name truncate">{main.name}</span>
+                          {parseRoles(main).length > 0 && (
+                            <span style={{ fontSize: '10px', opacity: 0.6 }}>
+                              {parseRoles(main).map(r => { const rl = TOKEN_ROLES.find(tr => tr.key === r); return rl ? rl.icon : ''; }).join('')}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            className="btn btn-ghost btn-icon"
+                            title="Show details"
+                            onClick={() => setExpandedStoryId(prev => prev === main.id ? null : main.id)}
+                            style={{ color: expandedStoryId === main.id ? '#818cf8' : 'var(--text-tertiary)', fontSize: '12px' }}
+                          >
+                            {expandedStoryId === main.id ? '🔽' : 'ℹ️'}
+                          </button>
+                          <button
+                            className="btn btn-ghost btn-icon"
+                            title="Quick test"
+                            disabled={quickTestingId === main.id}
+                            onClick={() => handleQuickTest(main)}
+                            style={{ color: '#34d399' }}
+                          >
+                            {quickTestingId === main.id ? <span className="spinner" style={{ width: 14, height: 14 }} /> : '▶'}
+                          </button>
+                          <button className="btn btn-ghost btn-icon" title="Copy curl" onClick={() => {
+                            const curl = buildCurlForStory(main);
+                            navigator.clipboard.writeText(curl).then(() => toast.success('curl copied to clipboard!'));
+                          }}>📋</button>
+                          <button className="btn btn-ghost btn-icon" onClick={() => handleEdit(main)}>✏️</button>
+                          <button className="btn btn-ghost btn-icon" onClick={() => handleDelete(main.id)} style={{ color: 'var(--color-error)' }}>🗑️</button>
+                        </div>
+                      </div>
+                      <code className="se-story-endpoint truncate">{main.endpoint}</code>
+                      <div className="se-story-meta">
+                        <span className="badge badge-neutral">Exp: {main.expected_status}</span>
+                        {(() => {
+                          let roles = main.token_roles || [];
+                          if (typeof roles === 'string') { try { roles = JSON.parse(roles); } catch { roles = []; } }
+                          return Array.isArray(roles) ? roles.map(r => {
+                            const role = TOKEN_ROLES.find(tr => tr.key === r);
+                            return role ? (
+                              <span key={r} className="chip" style={{ background: role.color + '20', color: role.color, border: `1px solid ${role.color}40`, fontSize: '10px' }}>
+                                {role.icon} {role.label}
+                              </span>
+                            ) : null;
+                          }) : null;
+                        })()}
+                        {(Array.isArray(main.tags) ? main.tags : []).map(t => (
+                          <span key={t} className="chip">{t}</span>
+                        ))}
+                      </div>
+                      {main.description && <div className="se-story-desc truncate">{main.description}</div>}
+                      {/* Expandable detail panel */}
+                      {renderStoryDetail(main)}
+                      {/* Quick test result for main story */}
+                      {quickTestResults[main.id] && (
+                        <div className="se-quick-result" style={{ marginTop: '6px' }}>
+                          <span className={`badge ${quickTestResults[main.id].ok ? 'badge-success' : 'badge-error'}`} style={{ fontSize: '10px', padding: '2px 8px' }}>
+                            {quickTestResults[main.id].ok ? '✅' : '❌'} HTTP {quickTestResults[main.id].status}
+                          </span>
+                          {quickTestResults[main.id].time > 0 && (
+                            <span className="badge badge-neutral" style={{ fontSize: '9px', padding: '1px 5px' }}>{quickTestResults[main.id].time}ms</span>
+                          )}
+                          <button className="btn btn-ghost btn-xs" onClick={() => setQuickTestResults(prev => { const n = {...prev}; delete n[main.id]; return n; })} style={{ fontSize: '10px', padding: '0 4px' }}>✕</button>
+                        </div>
+                      )}
+                      {subs.length > 0 && (
+                        <button
+                          className="btn btn-ghost btn-sm se-sub-toggle"
+                          onClick={() => setExpandedGroups(prev => ({ ...prev, [groupKey]: !isExpanded }))}
+                          style={{ marginTop: '6px', fontSize: '10px', width: '100%', justifyContent: 'center', gap: '4px', color: 'var(--text-tertiary)' }}
+                        >
+                          {isExpanded ? '▾' : '▸'} {subs.length} sub-{subs.length === 1 ? 'story' : 'stories'}
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Sub-Stories */}
+                    {subs.length > 0 && isExpanded && (
+                      <div className="se-sub-stories">
+                        {subs.map(sub => (
+                          <div key={sub.id} className="se-sub-story-wrapper">
+                          <div className="se-sub-story">
+                            <div className="se-sub-story-left">
+                              <span className="se-sub-connector" />
+                              {parseRoles(sub).length > 0 && (
+                                <span style={{ fontSize: '10px', flexShrink: 0 }}>
+                                  {parseRoles(sub).map(r => { const rl = TOKEN_ROLES.find(tr => tr.key === r); return rl ? rl.icon : ''; }).join('')}
+                                </span>
+                              )}
+                              <span className="se-sub-story-name truncate">{sub.name}</span>
+                            </div>
+                            <div className="se-sub-story-right">
+                              <span className={`badge ${sub.expected_status >= 400 ? 'badge-error' : 'badge-neutral'}`} style={{ fontSize: '9px', padding: '1px 6px' }}>
+                                {sub.expected_status}
+                              </span>
+                              {quickTestResults[sub.id] && (
+                                <span className={`badge ${quickTestResults[sub.id].ok ? 'badge-success' : 'badge-error'}`} style={{ fontSize: '9px', padding: '1px 6px' }}>
+                                  {quickTestResults[sub.id].ok ? '✅' : '❌'} {quickTestResults[sub.id].status}
+                                </span>
+                              )}
+                              {(Array.isArray(sub.tags) ? sub.tags : []).slice(0, 2).map(t => (
+                                <span key={t} className="chip" style={{ fontSize: '9px', padding: '0 5px' }}>{t}</span>
+                              ))}
+                              <button
+                                className="btn btn-ghost btn-icon btn-xs"
+                                title="Show details"
+                                onClick={() => setExpandedStoryId(prev => prev === sub.id ? null : sub.id)}
+                                style={{ color: expandedStoryId === sub.id ? '#818cf8' : 'var(--text-tertiary)', fontSize: '10px' }}
+                              >
+                                {expandedStoryId === sub.id ? '🔽' : 'ℹ️'}
+                              </button>
+                              <button
+                                className="btn btn-ghost btn-icon btn-xs"
+                                title="Quick test"
+                                disabled={quickTestingId === sub.id}
+                                onClick={() => handleQuickTest(sub)}
+                                style={{ color: '#34d399' }}
+                              >
+                                {quickTestingId === sub.id ? <span className="spinner" style={{ width: 12, height: 12 }} /> : '▶'}
+                              </button>
+                              <button className="btn btn-ghost btn-icon btn-xs" title="Copy curl" onClick={() => {
+                                const curl = buildCurlForStory(sub);
+                                navigator.clipboard.writeText(curl).then(() => toast.success('curl copied!'));
+                              }}>📋</button>
+                              <button className="btn btn-ghost btn-icon btn-xs" onClick={() => handleEdit(sub)}>✏️</button>
+                              <button className="btn btn-ghost btn-icon btn-xs" onClick={() => handleDelete(sub.id)} style={{ color: 'var(--color-error)' }}>🗑️</button>
+                            </div>
+                          </div>
+                          {/* Sub-story expandable detail */}
+                          {renderStoryDetail(sub)}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                  <div className="flex gap-2">
-                    <button className="btn btn-ghost btn-icon" title="Copy curl" onClick={() => {
-                      const curl = buildCurlForStory(story);
-                      navigator.clipboard.writeText(curl).then(() => toast.success('curl copied to clipboard!'));
-                    }}>📋</button>
-                    <button className="btn btn-ghost btn-icon" onClick={() => handleEdit(story)}>✏️</button>
-                    <button className="btn btn-ghost btn-icon" onClick={() => handleDelete(story.id)} style={{ color: 'var(--color-error)' }}>🗑️</button>
-                  </div>
-                </div>
-                <code className="se-story-endpoint truncate">{story.endpoint}</code>
-                <div className="se-story-meta">
-                  <span className="badge badge-neutral">Exp: {story.expected_status}</span>
-                  {(() => {
-                    let roles = story.token_roles || [];
-                    if (typeof roles === 'string') { try { roles = JSON.parse(roles); } catch { roles = []; } }
-                    return Array.isArray(roles) ? roles.map(r => {
-                      const role = TOKEN_ROLES.find(tr => tr.key === r);
-                      return role ? (
-                        <span key={r} className="chip" style={{ background: role.color + '20', color: role.color, border: `1px solid ${role.color}40`, fontSize: '10px' }}>
-                          {role.icon} {role.label}
-                        </span>
-                      ) : null;
-                    }) : null;
-                  })()}
-                  {(Array.isArray(story.tags) ? story.tags : []).map(t => (
-                    <span key={t} className="chip">{t}</span>
-                  ))}
-                </div>
-                {story.description && <div className="se-story-desc truncate">{story.description}</div>}
-              </div>
-            ))}
+                );
+              });
+            })()}
           </div>
         ) : (
           <div className="empty-state" style={{ padding: 'var(--space-12)' }}>
@@ -629,8 +881,11 @@ export default function StoryEditor() {
                       <option value="groq-llama-3.3-70b-versatile">Groq Llama 3.3 70B (Fast)</option>
                       <option value="groq-llama-3.1-8b-instant">Groq Llama 3.1 8B (Fast)</option>
                     </select>
-                    <button className="btn btn-secondary btn-sm" onClick={handleAIGenerate} disabled={generatingAI}>
-                      {generatingAI ? <><span className="spinner" /> Analyzing code...</> : '✨ Generate Payload'}
+                    <button className="btn btn-secondary btn-sm" onClick={() => handleAIGenerate(false)} disabled={generatingAI}>
+                      {generatingAI ? <><span className="spinner" /> Analyzing...</> : '✨ Generate Payload'}
+                    </button>
+                    <button className="btn btn-primary btn-sm" onClick={() => handleAIGenerate(true)} disabled={generatingAI} title="Maximize prompt caching for DeepSeek/OpenAI" style={{ background: '#34d399', color: '#064e3b', border: 'none' }}>
+                      {generatingAI ? <><span className="spinner" /> Analyzing...</> : '⚡ Cache Optimized'}
                     </button>
                   </div>
                 </div>
@@ -652,6 +907,97 @@ export default function StoryEditor() {
                   This tool will recursively read your local handlers using the <strong>Global Repository Path</strong> from your Dashboard, and analyze your DB schema to automatically write the request payload. Ensure GEMINI_API_KEY is configured in your .env file.
                 </p>
               </div>
+
+              {/* ── AI Generated Test Cases List ── */}
+              {aiTestCases.length > 1 && (
+                <div className="form-group" style={{ gridColumn: '1 / -1', background: 'rgba(99, 102, 241, 0.04)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)', border: '1px solid rgba(99, 102, 241, 0.15)' }}>
+                  <div className="flex items-center justify-between" style={{ marginBottom: 'var(--space-2)' }}>
+                    <label className="form-label" style={{ margin: 0, color: '#818cf8' }}>📋 AI Generated Test Cases ({aiTestCases.length})</label>
+                    <div className="flex gap-2">
+                      <button
+                        className="btn btn-sm"
+                        onClick={async () => {
+                          let headers = null;
+                          try { headers = formData.request_headers ? JSON.parse(formData.request_headers) : null; } catch {}
+                          let savedCount = 0;
+                          for (const tc of aiTestCases) {
+                            try {
+                              await api.createStory({
+                                ...formData,
+                                name: tc.name,
+                                expected_status: parseInt(tc.expected_status, 10) || 200,
+                                request_body: tc.request_body,
+                                request_headers: headers,
+                                tags: tc.tags || [],
+                              });
+                              savedCount++;
+                            } catch {}
+                          }
+                          loadData();
+                          setAiTestCases([]);
+                          toast.success(`Saved all ${savedCount} test cases as stories!`);
+                        }}
+                        style={{ background: 'rgba(52,211,153,0.12)', color: '#34d399', border: '1px solid rgba(52,211,153,0.3)', fontWeight: 600, fontSize: '10px' }}
+                      >
+                        💾 Save All as Stories
+                      </button>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => setAiTestCases([])}
+                        style={{ fontSize: '10px' }}
+                      >
+                        ✕ Clear
+                      </button>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '220px', overflowY: 'auto' }}>
+                    {aiTestCases.map((tc, idx) => {
+                      const isActive = formData.name === tc.name;
+                      return (
+                        <div
+                          key={idx}
+                          onClick={() => {
+                            setFormData(prev => ({
+                              ...prev,
+                              name: tc.name || prev.name,
+                              expected_status: tc.expected_status || prev.expected_status,
+                              request_body: tc.request_body ? JSON.stringify(tc.request_body, null, 2) : prev.request_body,
+                              tags: tc.tags ? JSON.stringify(tc.tags, null, 2) : prev.tags,
+                            }));
+                            toast.info(`Loaded test case #${idx + 1}: ${tc.name}`);
+                          }}
+                          style={{
+                            padding: '8px 12px',
+                            borderRadius: 'var(--radius-sm)',
+                            background: isActive ? 'rgba(99, 102, 241, 0.12)' : 'var(--bg-inset)',
+                            border: `1px solid ${isActive ? 'rgba(99, 102, 241, 0.4)' : 'var(--border-subtle)'}`,
+                            cursor: 'pointer',
+                            transition: 'all 0.15s ease',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '8px',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                            <span style={{ fontSize: '10px', color: 'var(--text-tertiary)', fontWeight: 700, flexShrink: 0 }}>#{idx + 1}</span>
+                            <span style={{ fontSize: '12px', fontWeight: 500, color: isActive ? '#818cf8' : 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tc.name}</span>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
+                            <span className={`badge ${tc.expected_status >= 400 ? 'badge-error' : 'badge-success'}`} style={{ fontSize: '9px', padding: '1px 6px' }}>
+                              {tc.expected_status}
+                            </span>
+                            {isActive && <span style={{ fontSize: '10px', color: '#818cf8' }}>✓ loaded</span>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p style={{ fontSize: '9px', color: 'var(--text-tertiary)', marginTop: 'var(--space-2)' }}>
+                    Click any test case to load it into the form above. Then <strong>💾 Save Story</strong> to save it. Use <strong>💾 Save All</strong> to bulk-save all at once.
+                  </p>
+                </div>
+              )}
 
               <div className="form-group" style={{ gridColumn: '1 / -1' }}>
                 <div className="flex items-center justify-between">
