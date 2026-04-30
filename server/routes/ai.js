@@ -6,31 +6,60 @@ import { stagingQuery } from '../db.js';
 
 const router = Router();
 
-// Helper to recursively read files with basic filtering
-function readRepoFiles(dir, maxDepth = 3, currentDepth = 0, state = { totalLength: 0 }) {
+// Helper to recursively read files with smart filtering to reduce AI input cache
+function readRepoFiles(dir, endpoint = '', maxDepth = 5, currentDepth = 0, state = { totalLength: 0 }) {
   let results = '';
-  if (currentDepth > maxDepth || state.totalLength > 35000) return results;
+  // Limit to ~25000 chars (approx 6k tokens) to accommodate SAM template + layers + handlers
+  if (currentDepth > maxDepth || state.totalLength > 25000) return results;
+  
+  // Extract keywords from the endpoint (e.g., "/api/runs/execute" -> "runs", "execute")
+  const endpointParts = (endpoint || '').split('/').filter(p => p && p !== 'api' && !p.startsWith(':'));
   
   try {
     const list = fs.readdirSync(dir);
+    
+    // Sort to prioritize SAM template and files that match the endpoint name
+    list.sort((a, b) => {
+      if (a === 'template.yaml' || a === 'template.yml') return -1;
+      if (b === 'template.yaml' || b === 'template.yml') return 1;
+      const aMatches = endpointParts.some(p => a.includes(p));
+      const bMatches = endpointParts.some(p => b.includes(p));
+      if (aMatches && !bMatches) return -1;
+      if (!aMatches && bMatches) return 1;
+      return 0;
+    });
+
     for (const file of list) {
-      if (state.totalLength > 35000) break; // hard limit to ~8k tokens to prevent quota exhaustion on Groq/etc
+      if (state.totalLength > 25000) break;
       
       const fullPath = path.join(dir, file);
       const stat = fs.statSync(fullPath);
       
       if (stat && stat.isDirectory()) {
-        if (!['node_modules', '.git', 'dist', 'build', 'coverage', 'docs'].includes(file)) {
-          results += readRepoFiles(fullPath, maxDepth, currentDepth + 1, state);
+        // Exclude frontend/client folders but KEEP 'src' and 'layers' which are common in AWS SAM
+        if (!['node_modules', '.git', 'dist', 'build', 'coverage', 'docs', 'public', 'assets', 'components', 'tests', 'client', 'frontend'].includes(file)) {
+          results += readRepoFiles(fullPath, endpoint, maxDepth, currentDepth + 1, state);
         }
       } else {
-        // Ignore test files to save context space
-        if (file.includes('.test.') || file.includes('.spec.')) continue;
+        // Ignore tests, locks, and md files
+        if (file.includes('.test.') || file.includes('.spec.') || file === 'package-lock.json' || file === 'yarn.lock' || file.endsWith('.md')) continue;
         
         if (['.js', '.ts', '.json', '.yaml', '.yml'].includes(path.extname(file))) {
-          // Limit individual file read
           let content = fs.readFileSync(fullPath, 'utf8');
-          if (content.length > 10000) content = content.substring(0, 10000) + '\n...[TRUNCATED]';
+          
+          // SAM specific logic: Always include template.yaml, db configs, and any files inside a 'layers' folder
+          const isCoreFile = file === 'index.js' || file === 'db.js' || file === 'app.js' || file === 'server.js' ||
+                             file === 'template.yaml' || file === 'template.yml' || 
+                             fullPath.includes('/layers/') || fullPath.includes('\\layers\\');
+                             
+          const matchesEndpoint = endpointParts.some(p => file.includes(p) || content.includes(p));
+          
+          if (endpointParts.length > 0 && !isCoreFile && !matchesEndpoint) {
+            continue; // Skip file to save input cache
+          }
+
+          // Limit individual file size to 6000 chars
+          if (content.length > 6000) content = content.substring(0, 6000) + '\n...[TRUNCATED TO SAVE CACHE]';
           
           const fileSnippet = `\n--- File: ${fullPath} ---\n${content}\n`;
           state.totalLength += fileSnippet.length;
@@ -58,8 +87,8 @@ router.post('/generate', async (req, res) => {
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
     
-    // Read the local code
-    const codeContext = readRepoFiles(repo_path);
+    // Read the local code (filtered by endpoint to reduce input cache)
+    const codeContext = readRepoFiles(repo_path, endpoint);
     
     // Read the Database Schema (if configured)
     let dbContext = '';
@@ -280,16 +309,38 @@ router.post('/analyze-failure', async (req, res) => {
   try {
     const { method, endpoint, repo_path, request_body, request_headers, response_status, response_body, expected_status, model, token_roles } = req.body;
     
-    if (!process.env.GEMINI_API_KEY) {
-      return res.status(400).json({ error: 'GEMINI_API_KEY is not set in .env' });
-    }
     if (!repo_path || !fs.existsSync(repo_path)) {
       return res.status(400).json({ error: 'Invalid or missing repo_path.' });
     }
 
-    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    const localContext = await getLocalContext(repo_path, endpoint);
     const aiModel = model || 'gemini-2.5-flash';
+
+    // Read the local code (filtered by endpoint to reduce input cache)
+    const codeContext = readRepoFiles(repo_path, endpoint);
+    
+    // Read the Database Schema (if configured)
+    let dbContext = '';
+    if (process.env.STAGING_DB_NAME) {
+      try {
+        const schemaInfo = await stagingQuery(
+          'SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, COLUMN_KEY FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ?',
+          [process.env.STAGING_DB_NAME]
+        );
+        const schema = {};
+        schemaInfo.forEach(row => {
+          if (!schema[row.TABLE_NAME]) schema[row.TABLE_NAME] = [];
+          schema[row.TABLE_NAME].push(`${row.COLUMN_NAME} (${row.DATA_TYPE}${row.COLUMN_KEY === 'PRI' ? ' - PK' : ''})`);
+        });
+        
+        dbContext = `\nHere is the Database Schema for the Staging Database to help you understand the expected data structures:\n`;
+        for (const [table, cols] of Object.entries(schema)) {
+          dbContext += `- Table '${table}': ${cols.join(', ')}\n`;
+        }
+      } catch (e) {
+        // DB not connected, skip silently
+      }
+    }
+    const localContext = codeContext + '\n' + dbContext;
 
     const prompt = `
 You are an expert Backend QA Engineer. A test just failed in the Nextest API platform.
@@ -324,42 +375,111 @@ Return ONLY a valid JSON object matching this schema exactly, with NO markdown f
     let resultText = '';
 
     if (aiModel.startsWith('gemini')) {
-      const gModel = ai.getGenerativeModel({ model: aiModel });
-      const response = await gModel.generateContent(prompt);
-      resultText = response.response.text();
+      if (!process.env.GEMINI_API_KEY) return res.status(400).json({ error: 'GEMINI_API_KEY is not set in .env' });
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const response = await ai.models.generateContent({
+        model: aiModel,
+        contents: prompt,
+        config: { temperature: 0.2 }
+      });
+      resultText = (typeof response.text === 'function' ? response.text() : response.text) || '';
+      
     } else if (aiModel.startsWith('claude')) {
-      if (!process.env.ANTHROPIC_API_KEY) return res.status(400).json({ error: 'ANTHROPIC_API_KEY is not set' });
-      const claude = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-      const response = await claude.messages.create({
-        model: aiModel,
-        max_tokens: 2000,
-        messages: [{ role: 'user', content: prompt }]
+      if (!process.env.ANTHROPIC_API_KEY) return res.status(400).json({ error: 'ANTHROPIC_API_KEY is not set in .env' });
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01'
+        },
+        body: JSON.stringify({
+          model: aiModel,
+          max_tokens: 4000,
+          temperature: 0.2,
+          messages: [{ role: 'user', content: prompt }]
+        })
       });
-      resultText = response.content[0].text;
-    } else if (aiModel.startsWith('gpt')) {
-      if (!process.env.OPENAI_API_KEY) return res.status(400).json({ error: 'OPENAI_API_KEY is not set' });
-      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-      const response = await openai.chat.completions.create({
-        model: aiModel,
-        messages: [{ role: 'user', content: prompt }]
-      });
-      resultText = response.choices[0].message.content;
+      if (!resp.ok) throw new Error(`Claude API error: ${await resp.text()}`);
+      const data = await resp.json();
+      resultText = data.content[0].text;
+      
     } else if (aiModel.startsWith('deepseek')) {
-      if (!process.env.DEEPSEEK_API_KEY) return res.status(400).json({ error: 'DEEPSEEK_API_KEY is not set' });
-      const deepseek = new OpenAI({ apiKey: process.env.DEEPSEEK_API_KEY, baseURL: 'https://api.deepseek.com' });
-      const response = await deepseek.chat.completions.create({
-        model: aiModel,
-        messages: [{ role: 'user', content: prompt }]
+      if (!process.env.DEEPSEEK_API_KEY) return res.status(400).json({ error: 'DEEPSEEK_API_KEY is not set in .env' });
+      const resp = await fetch('https://api.deepseek.com/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.DEEPSEEK_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: aiModel,
+          temperature: 0.2,
+          messages: [{ role: 'user', content: prompt }]
+        })
       });
-      resultText = response.choices[0].message.content;
-    } else if (aiModel.startsWith('groq')) {
-      if (!process.env.GROQ_API_KEY) return res.status(400).json({ error: 'GROQ_API_KEY is not set' });
-      const groq = new OpenAI({ apiKey: process.env.GROQ_API_KEY, baseURL: 'https://api.groq.com/openai/v1' });
-      const response = await groq.chat.completions.create({
-        model: aiModel.replace('groq-', ''),
-        messages: [{ role: 'user', content: prompt }]
+      if (!resp.ok) throw new Error(`Deepseek API error: ${await resp.text()}`);
+      const data = await resp.json();
+      resultText = data.choices[0].message.content;
+      
+    } else if (aiModel.startsWith('gpt-')) {
+      if (!process.env.OPENAI_API_KEY) return res.status(400).json({ error: 'OPENAI_API_KEY is not set in .env' });
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: aiModel,
+          temperature: 0.2,
+          messages: [{ role: 'user', content: prompt }]
+        })
       });
-      resultText = response.choices[0].message.content;
+      if (!resp.ok) throw new Error(`OpenAI API error: ${await resp.text()}`);
+      const data = await resp.json();
+      resultText = data.choices[0].message.content;
+      
+    } else if (aiModel.startsWith('groq-')) {
+      if (!process.env.GROQ_API_KEY) return res.status(400).json({ error: 'GROQ_API_KEY is not set in .env' });
+      const realModel = aiModel.replace('groq-', '');
+      const resp = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
+        },
+        body: JSON.stringify({
+          model: realModel,
+          temperature: 0.2,
+          messages: [{ role: 'user', content: prompt }]
+        })
+      });
+      if (!resp.ok) throw new Error(`Groq API error: ${await resp.text()}`);
+      const data = await resp.json();
+      resultText = data.choices[0].message.content;
+
+    } else if (aiModel.startsWith('openrouter-')) {
+      if (!process.env.OPENROUTER_API_KEY) return res.status(400).json({ error: 'OPENROUTER_API_KEY is not set in .env' });
+      const realModel = aiModel.replace('openrouter-', '');
+      const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          'HTTP-Referer': 'http://localhost:3001',
+          'X-Title': 'Nextest QA'
+        },
+        body: JSON.stringify({
+          model: realModel,
+          temperature: 0.2,
+          messages: [{ role: 'user', content: prompt }]
+        })
+      });
+      if (!resp.ok) throw new Error(`OpenRouter API error: ${await resp.text()}`);
+      const data = await resp.json();
+      resultText = data.choices[0].message.content;
+      
     } else {
       return res.status(400).json({ error: 'Unsupported model selected: ' + aiModel });
     }
