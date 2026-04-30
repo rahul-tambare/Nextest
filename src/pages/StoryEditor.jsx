@@ -228,6 +228,7 @@ export default function StoryEditor() {
         endpoint: formData.endpoint,
         repo_path: p,
         test_cases: formData.test_cases,
+        token_roles: formData.token_roles || [],
         model: aiModel
       });
       
@@ -371,6 +372,7 @@ export default function StoryEditor() {
         endpoint: formData.endpoint,
         repo_path: p,
         model: aiModel,
+        token_roles: formData.token_roles || [],
         test_cases: `The API returned HTTP ${testResult.status} with this error response:\n${errorContext}\n\nThe original request body was:\n${formData.request_body}\n\nPlease analyze the error and fix the request body to make a successful request. Return ONLY one corrected test case.`,
       });
 
@@ -422,6 +424,7 @@ export default function StoryEditor() {
           response_status: testResult.status,
           response_body: responseBody,
           expected_status: formData.expected_status,
+          token_roles: formData.token_roles || [],
         }),
       });
       const data = await resp.json();

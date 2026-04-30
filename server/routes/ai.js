@@ -46,7 +46,7 @@ function readRepoFiles(dir, maxDepth = 3, currentDepth = 0, state = { totalLengt
 
 router.post('/generate', async (req, res) => {
   try {
-    const { method, endpoint, repo_path, test_cases, model } = req.body;
+    const { method, endpoint, repo_path, test_cases, model, token_roles } = req.body;
     
     if (!process.env.GEMINI_API_KEY) {
       return res.status(400).json({ error: 'GEMINI_API_KEY is not set in .env' });
@@ -85,10 +85,13 @@ router.post('/generate', async (req, res) => {
     }
     
     let prompt;
+    const roleString = token_roles && token_roles.length > 0 ? token_roles.join(', ') : 'Default/None';
     if (test_cases && test_cases.trim() !== '') {
       prompt = `
 You are a Senior QA Automation Engineer.
 We need to test the API endpoint: ${method} ${endpoint}
+
+USER ROLE CONTEXT: The request will be executed by users with these roles: ${roleString}.
 
 Here is the source code context from the local repository handling this endpoint:
 ${codeContext}
@@ -122,6 +125,8 @@ Do not wrap in markdown \`\`\`json block. Just pure JSON.
       prompt = `
 You are a Senior QA Automation Engineer.
 We need to test the API endpoint: ${method} ${endpoint}
+
+USER ROLE CONTEXT: The request will be executed by users with these roles: ${roleString}. Keep this in mind when determining what data is appropriate.
 
 Here is the source code context from the local repository handling this endpoint:
 ${codeContext}
@@ -273,7 +278,7 @@ Do not wrap in markdown \`\`\`json block. Just pure JSON.
 // ── Analyze Failure ──
 router.post('/analyze-failure', async (req, res) => {
   try {
-    const { method, endpoint, repo_path, request_body, request_headers, response_status, response_body, expected_status, model } = req.body;
+    const { method, endpoint, repo_path, request_body, request_headers, response_status, response_body, expected_status, model, token_roles } = req.body;
     
     if (!process.env.GEMINI_API_KEY) {
       return res.status(400).json({ error: 'GEMINI_API_KEY is not set in .env' });
@@ -296,6 +301,7 @@ ${localContext}
 TEST EXECUTION DETAILS:
 Method: ${method}
 Endpoint: ${endpoint}
+User Roles: ${token_roles && token_roles.length > 0 ? token_roles.join(', ') : 'Default/None'}
 Request Headers: ${request_headers || '{}'}
 Request Body: ${request_body || '{}'}
 

@@ -13,7 +13,7 @@ router.post('/', async (req, res) => {
       ...headers,
     };
     if (token) {
-      fetchHeaders['Authorization'] = `Bearer ${token}`;
+      fetchHeaders['Authorization'] = token;
     }
 
     const fetchOpts = {

@@ -100,7 +100,7 @@ router.post('/:id/execute', async (req, res) => {
           const fetchOpts = {
             method: story.method,
             headers: {
-              'Authorization': `Bearer ${exec.token}`,
+              'Authorization': exec.token,
               'Content-Type': 'application/json',
               ...(story.request_headers ? JSON.parse(story.request_headers) : {}),
             },
