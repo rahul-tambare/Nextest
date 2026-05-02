@@ -115,6 +115,9 @@ const api = {
   // #19 Nextest Auth
   checkAuth: () => request('/nextest-auth/check'),
   login: (username, password) => request('/nextest-auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+
+  // AI Analytics
+  getAIMetrics: () => request('/ai/metrics'),
 };
 
 export default api;

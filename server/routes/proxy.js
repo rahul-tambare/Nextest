@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { getModuleIdForEndpoint } from '../db.js';
 
 const router = Router();
 
@@ -7,7 +8,7 @@ const router = Router();
 router.post('/', async (req, res) => {
   const startTime = Date.now();
   try {
-    const { method, url, headers, body, token, timeout } = req.body;
+    const { method, url, headers, body, token, timeout, role, endpoint } = req.body;
     const targetUrl = url || '';
     const timeoutMs = timeout || 30000; // #15 Default 30s timeout
 
@@ -17,6 +18,17 @@ router.post('/', async (req, res) => {
     };
     if (token) {
       fetchHeaders['Authorization'] = token;
+    }
+
+    // #admin-module-id
+    if (role === 'admin') {
+      const path = endpoint || (url ? new URL(url).pathname : null);
+      if (path) {
+        const moduleId = await getModuleIdForEndpoint(path);
+        if (moduleId) {
+          fetchHeaders['moduleid'] = moduleId;
+        }
+      }
     }
 
     const fetchOpts = {
@@ -74,6 +86,19 @@ router.post('/', async (req, res) => {
         proxyTime: elapsed,
       });
     }
+  }
+});
+
+// Get module-id for an endpoint (for UI/curl generation)
+router.get('/module-id', async (req, res) => {
+  try {
+    const { endpoint } = req.query;
+    if (!endpoint) return res.status(400).json({ error: 'Endpoint query param required' });
+    
+    const moduleId = await getModuleIdForEndpoint(endpoint);
+    res.json({ moduleId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

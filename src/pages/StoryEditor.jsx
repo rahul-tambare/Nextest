@@ -7,7 +7,7 @@ import './StoryEditor.css';
 
 const methodColors = { GET: 'method-GET', POST: 'method-POST', PUT: 'method-PUT', PATCH: 'method-PATCH', DELETE: 'method-DELETE' };
 
-function buildCurlForStory(story, selectedRole = '') {
+function buildCurlForStory(story, selectedRole = '', moduleId = null) {
   const baseUrl = localStorage.getItem('nextest_staging_base_url') || '';
   const url = `${baseUrl}${story.endpoint}`;
   let extraHeaders = {};
@@ -33,6 +33,9 @@ function buildCurlForStory(story, selectedRole = '') {
   } catch {}
   
   let curl = `curl -X ${story.method} \\\n  '${url}' \\\n  -H 'Authorization: ${tokenToUse}' \\\n  -H 'Content-Type: application/json'`;
+  if (moduleId && selectedRole === 'admin') {
+    curl += ` \\\n  -H 'moduleid: ${moduleId}'`;
+  }
   for (const [k, v] of Object.entries(extraHeaders)) {
     curl += ` \\\n  -H '${k}: ${v}'`;
   }
@@ -89,6 +92,7 @@ export default function StoryEditor() {
   const [aiFixing, setAiFixing] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const [activeModuleId, setActiveModuleId] = useState(null);
 
   // Quick Test from story list
   const [quickTestingId, setQuickTestingId] = useState(null);
@@ -300,12 +304,64 @@ export default function StoryEditor() {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
+  useEffect(() => {
+    if (formData.endpoint && (testRole === 'admin' || (formData.token_roles || []).includes('admin'))) {
+      const fetchModuleId = async () => {
+        try {
+          const resp = await fetch(`/staging-proxy/module-id?endpoint=${encodeURIComponent(formData.endpoint)}`);
+          const data = await resp.json();
+          setActiveModuleId(data.moduleId);
+        } catch {
+          setActiveModuleId(null);
+        }
+      };
+      fetchModuleId();
+    } else {
+      setActiveModuleId(null);
+    }
+  }, [formData.endpoint, testRole, formData.token_roles]);
+
   const handleEndpointSelect = (ep) => {
     setFormData((prev) => ({
       ...prev,
       method: ep.method,
       endpoint: ep.path,
     }));
+  };
+
+  const handleInjectAdminHeaders = async () => {
+    if (!formData.endpoint) {
+      toast.error('Please specify an endpoint first');
+      return;
+    }
+    
+    let mid = activeModuleId;
+    if (!mid) {
+      try {
+        const resp = await fetch(`/staging-proxy/module-id?endpoint=${encodeURIComponent(formData.endpoint)}`);
+        const data = await resp.json();
+        mid = data.moduleId;
+        if (mid) setActiveModuleId(mid);
+      } catch (err) {
+        console.error('Failed to fetch module id:', err);
+      }
+    }
+
+    const headers = {
+      "moduleid": mid || "TODO",
+      "platform": "4"
+    };
+
+    setFormData(prev => ({
+      ...prev,
+      request_headers: JSON.stringify(headers, null, 2)
+    }));
+
+    if (!mid) {
+      toast.warning('Could not find module-id in database. Using placeholder.');
+    } else {
+      toast.success(`Injected module-id: ${mid}`);
+    }
   };
 
   const toggleTokenRole = (roleKey) => {
@@ -442,6 +498,8 @@ export default function StoryEditor() {
         headers: headersObj,
         body: bodyObj,
         token: tokenToUse,
+        role: roles.length > 0 ? roles[0] : null,
+        endpoint: story.endpoint,
       });
       const passed = result.proxyStatus === parseInt(story.expected_status, 10);
       setQuickTestResults(prev => ({ ...prev, [story.id]: {
@@ -515,6 +573,8 @@ export default function StoryEditor() {
         headers: headersObj,
         body: bodyObj,
         token: tokenToUse,
+        role: testRole,
+        endpoint: formData.endpoint,
       });
       setTestResult({
         status: result.proxyStatus,
@@ -620,6 +680,24 @@ export default function StoryEditor() {
     } finally {
       setAnalyzing(false);
     }
+  };
+
+  const handleCopyCurl = async (story) => {
+    let roles = story.token_roles || [];
+    if (typeof roles === 'string') { try { roles = JSON.parse(roles); } catch { roles = []; } }
+    const role = roles.length > 0 ? roles[0] : '';
+    
+    let mid = null;
+    if (role === 'admin') {
+      try {
+        const resp = await fetch(`/staging-proxy/module-id?endpoint=${encodeURIComponent(story.endpoint)}`);
+        const data = await resp.json();
+        mid = data.moduleId;
+      } catch {}
+    }
+    
+    const curl = buildCurlForStory(story, role, mid);
+    navigator.clipboard.writeText(curl).then(() => toast.success('cURL copied to clipboard!'));
   };
 
   // Helper: parse roles from story
@@ -788,10 +866,7 @@ export default function StoryEditor() {
                           >
                             {quickTestingId === main.id ? <span className="spinner" style={{ width: 14, height: 14 }} /> : '▶'}
                           </button>
-                          <button className="btn btn-ghost btn-icon" title="Copy curl" onClick={() => {
-                            const curl = buildCurlForStory(main);
-                            navigator.clipboard.writeText(curl).then(() => toast.success('curl copied to clipboard!'));
-                          }}>📋</button>
+                          <button className="btn btn-ghost btn-icon" title="Copy curl" onClick={() => handleCopyCurl(main)}>📋</button>
                           <button className="btn btn-ghost btn-icon" onClick={() => handleEdit(main)}>✏️</button>
                           <button className="btn btn-ghost btn-icon" onClick={() => handleDelete(main.id, main.name)} style={{ color: 'var(--color-error)' }}>🗑️</button>
                         </div>
@@ -885,10 +960,7 @@ export default function StoryEditor() {
                               >
                                 {quickTestingId === sub.id ? <span className="spinner" style={{ width: 12, height: 12 }} /> : '▶'}
                               </button>
-                              <button className="btn btn-ghost btn-icon btn-xs" title="Copy curl" onClick={() => {
-                                const curl = buildCurlForStory(sub);
-                                navigator.clipboard.writeText(curl).then(() => toast.success('curl copied!'));
-                              }}>📋</button>
+                              <button className="btn btn-ghost btn-icon btn-xs" title="Copy curl" onClick={() => handleCopyCurl(sub)}>📋</button>
                               <button className="btn btn-ghost btn-icon btn-xs" onClick={() => handleEdit(sub)}>✏️</button>
                               <button className="btn btn-ghost btn-icon btn-xs" onClick={() => handleDelete(sub.id, sub.name)} style={{ color: 'var(--color-error)' }}>🗑️</button>
                             </div>
@@ -1027,8 +1099,8 @@ export default function StoryEditor() {
                   <div className="flex gap-2">
                     <button 
                       className="btn btn-ghost btn-sm" 
-                      onClick={() => setFormData(prev => ({ ...prev, request_headers: '{\n  "moduleid": "22",\n  "platform": "4"\n}' }))}
-                      title="Inject moduleid: 22 and platform: 4"
+                      onClick={handleInjectAdminHeaders}
+                      title="Fetch and inject module-id from DB"
                     >
                       👑 Admin Headers
                     </button>
@@ -1296,7 +1368,7 @@ export default function StoryEditor() {
                       <button
                         className="btn btn-ghost btn-sm"
                         onClick={() => {
-                          const curl = buildCurlForStory(formData, testRole);
+                          const curl = buildCurlForStory(formData, testRole, activeModuleId);
                           navigator.clipboard.writeText(curl).then(() => toast.success('cURL copied!'));
                         }}
                         style={{ fontSize: '11px' }}

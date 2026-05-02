@@ -146,11 +146,11 @@ export default function Dashboard() {
 
   const loadStats = async () => {
     try {
-      const [stories, runs, bugs] = await Promise.all([
+      const [stories, runs, bugs, aiResults] = await Promise.all([
         api.getStories().catch(() => []),
         api.getRuns().catch(() => []),
         api.getBugs().catch(() => []),
-        fetch('/api/ai/metrics').then(r => r.json()).catch(() => [])
+        api.getAIMetrics().catch(() => [])
       ]);
 
       setAiMetrics(Array.isArray(aiResults) ? aiResults : []);
@@ -276,17 +276,43 @@ export default function Dashboard() {
         ))}
       </div>
       
+      <div className="page-grid grid-cols-2" style={{ marginBottom: 'var(--space-6)' }}>
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">📈 Pass Rate Trend</span>
+          </div>
+          <div style={{ height: '250px', position: 'relative' }}>
+             {loading ? <div className="empty-state"><span className="spinner" /></div> : 
+              chartData.lineData ? <Line options={{...chartOptions, scales: {...chartOptions.scales, y: {...chartOptions.scales.y, max: 100}}}} data={chartData.lineData} /> : 
+              <div className="empty-state"><div className="empty-state-text">Not enough data to show trends. Run more tests!</div></div>}
+          </div>
+        </div>
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">⚡ Response Times (Latest Run)</span>
+          </div>
+          <div style={{ height: '250px', position: 'relative' }}>
+             {loading ? <div className="empty-state"><span className="spinner" /></div> : 
+              chartData.barData ? <Bar options={chartOptions} data={chartData.barData} /> : 
+              <div className="empty-state"><div className="empty-state-text">No recent results to display.</div></div>}
           </div>
         </div>
       </div>
 
       {/* 🤖 AI Model Performance Dashboard */}
-      {aiMetrics.length > 0 && (
-        <div className="card" style={{ marginBottom: 'var(--space-6)', border: '1px solid rgba(129, 140, 248, 0.2)', background: 'linear-gradient(135deg, rgba(129, 140, 248, 0.05) 0%, rgba(6, 182, 212, 0.05) 100%)' }}>
-          <div className="card-header">
-            <span className="card-title">🤖 AI Model Performance Track Record</span>
-            <span className="badge badge-neutral" style={{ fontSize: '10px' }}>Global Workspace Stats</span>
+      <div className="card" style={{ marginBottom: 'var(--space-6)', border: '1px solid rgba(129, 140, 248, 0.2)', background: 'linear-gradient(135deg, rgba(129, 140, 248, 0.05) 0%, rgba(6, 182, 212, 0.05) 100%)' }}>
+        <div className="card-header">
+          <span className="card-title">🤖 AI Model Performance Track Record</span>
+          <span className="badge badge-neutral" style={{ fontSize: '10px' }}>Global Workspace Stats</span>
+        </div>
+        
+        {aiMetrics.length === 0 ? (
+          <div className="empty-state" style={{ padding: 'var(--space-6)', border: 'none' }}>
+            <div style={{ fontSize: '2rem', marginBottom: 'var(--space-2)' }}>✨</div>
+            <div className="empty-state-text">No AI data yet.</div>
+            <p style={{ fontSize: '12px', color: 'var(--text-tertiary)', marginTop: 'var(--space-1)' }}>Generate your first test payload with AI in the Story Editor to start tracking model performance!</p>
           </div>
+        ) : (
           <div className="page-grid grid-cols-3" style={{ gap: 'var(--space-4)', padding: 'var(--space-2)' }}>
             {aiMetrics.sort((a, b) => (b.success_rate || 0) - (a.success_rate || 0)).map(m => (
               <div key={m.model} className="card" style={{ background: 'var(--bg-card)', padding: 'var(--space-4)', border: '1px solid var(--border-subtle)' }}>
@@ -315,11 +341,11 @@ export default function Dashboard() {
               </div>
             ))}
           </div>
-          <p style={{ fontSize: '11px', color: 'var(--text-tertiary)', padding: '0 var(--space-4) var(--space-4)' }}>
-            Success Rate (SR) is based on actual Test Runner results. Avg Iterations tracks how many "Quick Fixes" or regenerations were needed before saving.
-          </p>
-        </div>
-      )}
+        )}
+        <p style={{ fontSize: '11px', color: 'var(--text-tertiary)', padding: '0 var(--space-4) var(--space-4)' }}>
+          Success Rate (SR) is based on actual Test Runner results. Avg Iterations tracks how many "Quick Fixes" or regenerations were needed before saving.
+        </p>
+      </div>
 
       
       <div className="card" style={{ marginBottom: 'var(--space-6)' }}>

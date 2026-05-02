@@ -736,6 +736,17 @@ Return ONLY a valid JSON object matching this schema exactly, with NO markdown f
 // ── Get Model Metrics ──
 router.get('/metrics', async (req, res) => {
   try {
+    const workspaceId = req.workspace?.id;
+    
+    if (!workspaceId) {
+      // Fallback for safety if middleware failed to find a workspace
+      const defaultWs = await query('SELECT id FROM workspaces LIMIT 1');
+      if (defaultWs.length === 0) return res.json([]);
+      var targetId = defaultWs[0].id;
+    } else {
+      var targetId = workspaceId;
+    }
+
     // Calculate aggregate metrics for each AI model used in the workspace
     const metrics = await query(`
       SELECT 
@@ -757,7 +768,7 @@ router.get('/metrics', async (req, res) => {
       FROM test_stories ts
       WHERE workspace_id = ? AND ai_model IS NOT NULL
       GROUP BY ai_model
-    `, [req.workspace.id, req.workspace.id, req.workspace.id]);
+    `, [targetId, targetId, targetId]);
 
     res.json(metrics || []);
   } catch (err) {

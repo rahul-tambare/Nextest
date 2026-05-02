@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { query } from '../db.js';
+import { query, getModuleIdForEndpoint } from '../db.js';
 import { v4 as uuid } from 'uuid';
 
 const router = Router();
@@ -105,9 +105,15 @@ function classifyFailure(statusCode, error) {
 }
 
 // ── Helper: Execute a single request with retry (#2) ──
-async function executeWithRetry(story, stagingUrl, token, globalHeaders, maxRetries, timeoutMs) {
+async function executeWithRetry(story, stagingUrl, token, globalHeaders, maxRetries, timeoutMs, role = null) {
   let lastResult = null;
   const retryableTypes = ['timeout', 'server_error', 'network', 'rate_limited'];
+
+  // #admin-module-id: Fetch module ID if role is admin
+  let moduleId = null;
+  if (role === 'admin') {
+    moduleId = await getModuleIdForEndpoint(story.endpoint);
+  }
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const storyStart = Date.now();
@@ -126,6 +132,10 @@ async function executeWithRetry(story, stagingUrl, token, globalHeaders, maxRetr
       ...storyHeaders,
       'Authorization': token,
     };
+
+    if (moduleId) {
+      finalHeaders['moduleid'] = moduleId;
+    }
 
     const fetchOpts = {
       method: story.method,
@@ -340,7 +350,7 @@ router.post('/:id/execute', async (req, res) => {
             await new Promise(r => setTimeout(r, requestDelay));
           }
 
-          const result = await executeWithRetry(story, stagingUrl, exec.token, global_headers, maxRetries, globalTimeout);
+          const result = await executeWithRetry(story, stagingUrl, exec.token, global_headers, maxRetries, globalTimeout, exec.role);
 
           // Store result in DB with request snapshot (#14)
           if (result.status === 'error') {
@@ -355,7 +365,7 @@ router.post('/:id/execute', async (req, res) => {
 
             await query(
               `INSERT INTO test_results (id, run_id, story_id, status, expected_status, actual_status, response_body, response_time_ms, curl_command, request_snapshot, retry_count, failure_type, executed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,NOW())`,
-              [resultId, runId, story.id, result.status, story.expected_status, result.actualStatus, JSON.stringify(result.responseBody), result.elapsed, buildCurl(story, stagingUrl), JSON.stringify(result.requestSnapshot), result.retryCount, result.failureType]
+              [resultId, runId, story.id, result.status, story.expected_status, result.actualStatus, JSON.stringify(result.responseBody), result.elapsed, buildCurl(story, stagingUrl, exec.role, result.requestSnapshot.headers['moduleid']), JSON.stringify(result.requestSnapshot), result.retryCount, result.failureType]
             );
 
             // #12 Store response for downstream dependencies
@@ -426,8 +436,11 @@ function sortByDependencies(stories) {
   return sorted;
 }
 
-function buildCurl(story, url) {
+function buildCurl(story, url, role = null, moduleId = null) {
   let curl = `curl -X ${story.method} \\\n  '${url}' \\\n  -H 'Authorization: Bearer [REDACTED_TOKEN]' \\\n  -H 'Content-Type: application/json'`;
+  if (moduleId) {
+    curl += ` \\\n  -H 'moduleid: ${moduleId}'`;
+  }
   if (story.request_body && ['POST', 'PUT', 'PATCH'].includes(story.method)) {
     const body = typeof story.request_body === 'string' ? story.request_body : JSON.stringify(story.request_body);
     curl += ` \\\n  -d '${body}'`;
