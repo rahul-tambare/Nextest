@@ -64,10 +64,14 @@ const moduleIdCache = new Map();
 
 /**
  * Fetches the module_id for a given endpoint path from the staging database.
- * Uses the mapping from api_master and api_module_master.
+ * SQL query is loaded from STAGING_MODULE_QUERY env var to keep schema details private.
+ * The query must return a `module_id` column and accept two ? placeholders for endpoint matching.
  */
 export async function getModuleIdForEndpoint(endpoint) {
   if (!endpoint) return null;
+
+  const moduleQuery = process.env.STAGING_MODULE_QUERY;
+  if (!moduleQuery) return null;
 
   // Clean endpoint: remove query params and base path if any
   const cleanEndpoint = endpoint.split('?')[0];
@@ -77,17 +81,7 @@ export async function getModuleIdForEndpoint(endpoint) {
   }
 
   try {
-    // We search for a match in api_master joined with api_module_master.
-    // Ordering by length ensures the most specific match is chosen first.
-    const rows = await stagingQuery(
-      `SELECT m.module_id 
-       FROM api_master a
-       JOIN api_module_master m ON a.id = m.api_master_id
-       WHERE a.api_endpoint LIKE ? OR ? LIKE CONCAT("%", a.api_endpoint, "%")
-       ORDER BY LENGTH(a.api_endpoint) DESC 
-       LIMIT 1`,
-      [`%${cleanEndpoint}%`, cleanEndpoint]
-    );
+    const rows = await stagingQuery(moduleQuery, [`%${cleanEndpoint}%`, cleanEndpoint]);
 
     if (rows.length > 0) {
       const moduleId = rows[0].module_id;
@@ -103,24 +97,20 @@ export async function getModuleIdForEndpoint(endpoint) {
 
 /**
  * Fetches ALL module_ids for a given endpoint from the staging database.
- * Returns an array of { module_id, module_name, api_endpoint } objects.
+ * SQL query is loaded from STAGING_ALL_MODULES_QUERY env var.
+ * The query must return module_id, module_name, api_endpoint, method, api_name columns
+ * and accept two ? placeholders for endpoint matching.
  */
 export async function getAllModuleIdsForEndpoint(endpoint) {
   if (!endpoint) return [];
 
+  const allModulesQuery = process.env.STAGING_ALL_MODULES_QUERY;
+  if (!allModulesQuery) return [];
+
   const cleanEndpoint = endpoint.split('?')[0];
 
   try {
-    const rows = await stagingQuery(
-      `SELECT m.module_id, am.name AS module_name, a.api_endpoint, a.method, a.api_name
-       FROM api_master a
-       JOIN api_module_master m ON a.id = m.api_master_id
-       LEFT JOIN admin_modules am ON m.module_id = am.id
-       WHERE (a.api_endpoint LIKE ? OR ? LIKE CONCAT("%", a.api_endpoint, "%"))
-         AND a.is_deleted = 0
-       ORDER BY LENGTH(a.api_endpoint) DESC`,
-      [`%${cleanEndpoint}%`, cleanEndpoint]
-    );
+    const rows = await stagingQuery(allModulesQuery, [`%${cleanEndpoint}%`, cleanEndpoint]);
 
     return rows.map(r => ({
       module_id: r.module_id,
