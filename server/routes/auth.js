@@ -2,13 +2,9 @@ import { Router } from 'express';
 
 const router = Router();
 
-const CLIENT_NAMES = {
-  loyalty: 'Loyalty_Android',
-  buyer: 'Buyer_Android',
-  seller: 'Seller_Android',
-};
-
-const COGNITO_BASE = 'https://user-onboarding-api.utecstage.com/cognito';
+// Client names and auth base URL loaded from .env to keep proprietary config private
+const CLIENT_NAMES = JSON.parse(process.env.AUTH_CLIENT_NAMES || '{}');
+const COGNITO_BASE = process.env.AUTH_BASE_URL || '';
 
 // Step 1: Send OTP
 router.post('/send-otp', async (req, res) => {

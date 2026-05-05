@@ -5,9 +5,9 @@ import './TokenManager.css';
 
 const TOKEN_ROLES = [
   { key: 'admin', label: 'Admin', icon: '👑', color: '#f59e0b', desc: 'Full admin access with elevated privileges', canGenerate: false },
-  { key: 'loyalty', label: 'Loyalty', icon: '💎', color: '#8b5cf6', desc: 'Loyalty program member context', canGenerate: true, clientName: 'Loyalty_Android' },
-  { key: 'buyer', label: 'Buyer', icon: '🛒', color: '#06b6d4', desc: 'Consumer / buyer role context', canGenerate: true, clientName: 'Buyer_Android' },
-  { key: 'seller', label: 'Seller', icon: '🏪', color: '#10b981', desc: 'Merchant / seller role context', canGenerate: true, clientName: 'Seller_Android' },
+  { key: 'loyalty', label: 'Loyalty', icon: '💎', color: '#8b5cf6', desc: 'Loyalty program member context', canGenerate: true },
+  { key: 'buyer', label: 'Buyer', icon: '🛒', color: '#06b6d4', desc: 'Consumer / buyer role context', canGenerate: true },
+  { key: 'seller', label: 'Seller', icon: '🏪', color: '#10b981', desc: 'Merchant / seller role context', canGenerate: true },
 ];
 
 function decodeJWT(token) {
