@@ -93,6 +93,7 @@ export default function StoryEditor() {
   const [aiAnalysis, setAiAnalysis] = useState(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [activeModuleId, setActiveModuleId] = useState(null);
+  const [moduleIdOptions, setModuleIdOptions] = useState([]);
 
   // Quick Test from story list
   const [quickTestingId, setQuickTestingId] = useState(null);
@@ -306,18 +307,27 @@ export default function StoryEditor() {
 
   useEffect(() => {
     if (formData.endpoint && (testRole === 'admin' || (formData.token_roles || []).includes('admin'))) {
-      const fetchModuleId = async () => {
+      const fetchModuleIds = async () => {
         try {
-          const resp = await fetch(`/staging-proxy/module-id?endpoint=${encodeURIComponent(formData.endpoint)}`);
+          const resp = await fetch(`/staging-proxy/module-ids?endpoint=${encodeURIComponent(formData.endpoint)}`);
           const data = await resp.json();
-          setActiveModuleId(data.moduleId);
+          const modules = data.modules || [];
+          setModuleIdOptions(modules);
+          if (modules.length === 1) {
+            setActiveModuleId(modules[0].module_id);
+          } else if (modules.length > 1 && !activeModuleId) {
+            // Don't auto-select when multiple — let user choose
+            setActiveModuleId(null);
+          }
         } catch {
           setActiveModuleId(null);
+          setModuleIdOptions([]);
         }
       };
-      fetchModuleId();
+      fetchModuleIds();
     } else {
       setActiveModuleId(null);
+      setModuleIdOptions([]);
     }
   }, [formData.endpoint, testRole, formData.token_roles]);
 
@@ -336,14 +346,30 @@ export default function StoryEditor() {
     }
     
     let mid = activeModuleId;
+    if (!mid && moduleIdOptions.length === 1) {
+      mid = moduleIdOptions[0].module_id;
+      setActiveModuleId(mid);
+    }
+    if (!mid && moduleIdOptions.length > 1) {
+      toast.warning('Multiple module IDs found — please select one from the dropdown first.');
+      return;
+    }
     if (!mid) {
+      // Try fetching if we don't have options yet
       try {
-        const resp = await fetch(`/staging-proxy/module-id?endpoint=${encodeURIComponent(formData.endpoint)}`);
+        const resp = await fetch(`/staging-proxy/module-ids?endpoint=${encodeURIComponent(formData.endpoint)}`);
         const data = await resp.json();
-        mid = data.moduleId;
-        if (mid) setActiveModuleId(mid);
+        const modules = data.modules || [];
+        setModuleIdOptions(modules);
+        if (modules.length === 1) {
+          mid = modules[0].module_id;
+          setActiveModuleId(mid);
+        } else if (modules.length > 1) {
+          toast.warning('Multiple module IDs found — please select one from the dropdown first.');
+          return;
+        }
       } catch (err) {
-        console.error('Failed to fetch module id:', err);
+        console.error('Failed to fetch module ids:', err);
       }
     }
 
@@ -360,7 +386,8 @@ export default function StoryEditor() {
     if (!mid) {
       toast.warning('Could not find module-id in database. Using placeholder.');
     } else {
-      toast.success(`Injected module-id: ${mid}`);
+      const moduleName = moduleIdOptions.find(m => m.module_id === mid)?.module_name || '';
+      toast.success(`Injected module-id: ${mid}${moduleName ? ` (${moduleName})` : ''}`);
     }
   };
 
@@ -459,13 +486,15 @@ export default function StoryEditor() {
 
     // Resolve token
     let tokenToUse = sessionStorage.getItem('nextest_auth_token') || '';
+    let roles = story.token_roles || [];
+    if (typeof roles === 'string') { try { roles = JSON.parse(roles); } catch { roles = []; } }
+    if (!Array.isArray(roles)) roles = [];
+
     try {
       const repoName = localStorage.getItem('nextest_repo_name') || '';
       const allTokens = JSON.parse(localStorage.getItem('nextest_role_tokens') || '{}');
       const repoTokens = allTokens[repoName] || {};
-      let roles = story.token_roles || [];
-      if (typeof roles === 'string') { try { roles = JSON.parse(roles); } catch { roles = []; } }
-      if (Array.isArray(roles) && roles.length > 0 && repoTokens[roles[0]]) {
+      if (roles.length > 0 && repoTokens[roles[0]]) {
         tokenToUse = repoTokens[roles[0]];
       } else {
         const vals = Object.values(repoTokens).filter(v => v?.trim());
@@ -1104,6 +1133,30 @@ export default function StoryEditor() {
                     >
                       👑 Admin Headers
                     </button>
+                    {moduleIdOptions.length > 1 && (
+                      <select
+                        className="select select-sm"
+                        value={activeModuleId || ''}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setActiveModuleId(val ? parseInt(val) || val : null);
+                        }}
+                        style={{ width: 'auto', fontSize: '11px', padding: '0 6px', height: '26px', minWidth: '140px', background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)', color: '#f59e0b' }}
+                        title="Select which module-id to use"
+                      >
+                        <option value="">— Pick Module ID —</option>
+                        {moduleIdOptions.map((m, i) => (
+                          <option key={i} value={m.module_id}>
+                            {m.module_id} — {m.module_name}{m.api_endpoint ? ` (${m.api_endpoint})` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                    {moduleIdOptions.length === 1 && activeModuleId && (
+                      <span style={{ fontSize: '10px', color: '#f59e0b', padding: '2px 8px', background: 'rgba(245, 158, 11, 0.1)', borderRadius: '4px' }}>
+                        🔗 Module: {activeModuleId} — {moduleIdOptions[0]?.module_name}
+                      </span>
+                    )}
                     <button 
                       className="btn btn-ghost btn-sm" 
                       onClick={() => setFormData(prev => ({ ...prev, request_headers: '{\n  "platform": "4"\n}' }))}

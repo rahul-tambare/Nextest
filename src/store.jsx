@@ -8,6 +8,7 @@ const STORAGE_KEYS = {
   tokenStatus: 'nextest_token_status',
   tokenPayload: 'nextest_token_payload',
   sidebarCollapsed: 'nextest_sidebar_collapsed',
+  theme: 'nextest_theme',
 };
 
 function loadPersistedState() {
@@ -18,6 +19,8 @@ function loadPersistedState() {
     const tokenPayload = payloadRaw ? JSON.parse(payloadRaw) : null;
     const sidebarCollapsed = localStorage.getItem(STORAGE_KEYS.sidebarCollapsed) === 'true';
 
+    const theme = localStorage.getItem(STORAGE_KEYS.theme) || 'dark';
+
     // If token exists and has an exp claim, check if it's expired
     if (token && tokenPayload?.exp) {
       const isExpired = Date.now() / 1000 > tokenPayload.exp;
@@ -26,11 +29,11 @@ function loadPersistedState() {
         sessionStorage.removeItem(STORAGE_KEYS.token);
         sessionStorage.removeItem(STORAGE_KEYS.tokenStatus);
         sessionStorage.removeItem(STORAGE_KEYS.tokenPayload);
-        return { token: null, tokenStatus: 'none', tokenPayload: null, health: null, sidebarCollapsed };
+        return { token: null, tokenStatus: 'none', tokenPayload: null, health: null, sidebarCollapsed, theme };
       }
     }
 
-    return { token, tokenStatus, tokenPayload, health: null, sidebarCollapsed };
+    return { token, tokenStatus, tokenPayload, health: null, sidebarCollapsed, theme };
   } catch {
     return null;
   }
@@ -44,6 +47,7 @@ const initialState = persisted || {
   tokenPayload: null,
   health: null,
   sidebarCollapsed: false,
+  theme: 'dark',
 };
 
 function reducer(state, action) {
@@ -60,6 +64,8 @@ function reducer(state, action) {
       return { ...state, health: action.payload };
     case 'TOGGLE_SIDEBAR':
       return { ...state, sidebarCollapsed: !state.sidebarCollapsed };
+    case 'TOGGLE_THEME':
+      return { ...state, theme: state.theme === 'dark' ? 'light' : 'dark' };
     default:
       return state;
   }
@@ -82,7 +88,8 @@ export function StoreProvider({ children }) {
       sessionStorage.removeItem(STORAGE_KEYS.tokenPayload);
     }
     localStorage.setItem(STORAGE_KEYS.sidebarCollapsed, state.sidebarCollapsed);
-  }, [state.token, state.tokenStatus, state.tokenPayload, state.sidebarCollapsed]);
+    localStorage.setItem(STORAGE_KEYS.theme, state.theme);
+  }, [state.token, state.tokenStatus, state.tokenPayload, state.sidebarCollapsed, state.theme]);
 
   const actions = {
     setToken: useCallback((t) => dispatch({ type: 'SET_TOKEN', payload: t }), []),
@@ -91,6 +98,7 @@ export function StoreProvider({ children }) {
     clearToken: useCallback(() => dispatch({ type: 'CLEAR_TOKEN' }), []),
     setHealth: useCallback((h) => dispatch({ type: 'SET_HEALTH', payload: h }), []),
     toggleSidebar: useCallback(() => dispatch({ type: 'TOGGLE_SIDEBAR' }), []),
+    toggleTheme: useCallback(() => dispatch({ type: 'TOGGLE_THEME' }), []),
   };
 
   return (

@@ -2,9 +2,50 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { GoogleGenAI } from '@google/genai';
-import { query, stagingQuery } from '../db.js';
+import { query, stagingQuery, fetchSampleData, getStagingTableNames } from '../db.js';
 
 const router = Router();
+
+// Helper: Extract table names referenced in code context (SQL queries, ORM patterns)
+function extractReferencedTables(codeContext, allTableNames) {
+  if (!codeContext || !allTableNames || allTableNames.length === 0) return [];
+  
+  const found = new Set();
+  const codeUpper = codeContext.toUpperCase();
+  
+  // Match SQL patterns: FROM tableName, INTO tableName, JOIN tableName, UPDATE tableName
+  const sqlPatterns = [
+    /(?:FROM|INTO|JOIN|UPDATE)\s+`?(\w+)`?/gi,
+    /(?:INSERT\s+INTO)\s+`?(\w+)`?/gi,
+    /\.(?:findOne|findAll|find|create|update|destroy|count)\s*\(\s*{\s*(?:where|include)/gi,
+  ];
+  
+  // Create a lowercase set for case-insensitive matching
+  const tableNameLower = new Map(allTableNames.map(t => [t.toLowerCase(), t]));
+  
+  for (const pattern of sqlPatterns) {
+    let match;
+    while ((match = pattern.exec(codeContext)) !== null) {
+      if (match[1]) {
+        const candidate = match[1].toLowerCase();
+        if (tableNameLower.has(candidate)) {
+          found.add(tableNameLower.get(candidate));
+        }
+      }
+    }
+  }
+  
+  // Also check if any table name appears literally in the code context
+  // (e.g., in string literals like 'design_gallery' or variable names)
+  for (const tableName of allTableNames) {
+    if (codeContext.includes(tableName) || codeContext.includes(`'${tableName}'`) || codeContext.includes(`"${tableName}"`)) {
+      found.add(tableName);
+    }
+  }
+  
+  return [...found];
+}
+
 
 // Helper to trace AWS SAM dependencies from template.yaml to handler to imports
 function traceEndpointFiles(repoPath, endpoint, method) {
@@ -184,6 +225,7 @@ router.post('/generate', async (req, res) => {
     
     // Read the Database Schema (if configured)
     let dbContext = '';
+    let sampleDataContext = '';
     if (process.env.STAGING_DB_NAME) {
       try {
         const schemaInfo = await stagingQuery(
@@ -200,6 +242,22 @@ router.post('/generate', async (req, res) => {
         for (const [table, cols] of Object.entries(schema)) {
           dbContext += `- Table '${table}': ${cols.join(', ')}\n`;
         }
+
+        // ── REAL DATA: Extract table names from code and fetch sample rows ──
+        const allTableNames = Object.keys(schema);
+        const referencedTables = extractReferencedTables(codeContext, allTableNames);
+        
+        if (referencedTables.length > 0) {
+          const sampleData = await fetchSampleData(referencedTables, 3);
+          if (Object.keys(sampleData).length > 0) {
+            sampleDataContext = `\n<real_sample_data>\nBELOW IS REAL SAMPLE DATA FROM THE STAGING DATABASE. You MUST use these real IDs and values in your request_body instead of inventing fake ones.\n`;
+            for (const [table, rows] of Object.entries(sampleData)) {
+              sampleDataContext += `\n--- Table: ${table} (${rows.length} sample rows) ---\n`;
+              sampleDataContext += JSON.stringify(rows, null, 2) + '\n';
+            }
+            sampleDataContext += `</real_sample_data>\n`;
+          }
+        }
       } catch (e) {
         // DB not connected, skip silently
       }
@@ -215,7 +273,14 @@ CRITICAL TRACING INSTRUCTION (AWS SAM / Serverless):
 2. Locate that handler file in the provided context to see how the request is processed.
 3. Trace the handler to find which schema file (e.g. Joi validation) it uses. You MUST satisfy this schema perfectly.
 4. Follow the data flow to the service file to understand what data is inserted into the database. Make sure your request body has all the fields required by the service logic!
+
+CRITICAL REAL DATA INSTRUCTION:
+If <real_sample_data> is provided above, you MUST use REAL IDs, unique_ids, source values, and foreign key references from that data.
+DO NOT invent fake IDs like "DG450_3_2D" or placeholder values. Pick actual values from the sample rows.
+For example, if a field requires a "unique_id" and the sample data shows existing unique_ids, use one of those.
+For foreign key fields (ending in _id), look up the referenced table's sample data and use a real ID from there.
 `;
+
 
     if (useCachePrompt) {
       if (test_cases && test_cases.trim() !== '') {
@@ -227,6 +292,7 @@ ${codeContext}
 <database_schema>
 ${dbContext}
 </database_schema>
+${sampleDataContext}
 
 You are a Senior QA Automation Engineer.
 We need to test the API endpoint: ${method} ${endpoint}
@@ -267,7 +333,7 @@ ${codeContext}
 <database_schema>
 ${dbContext}
 </database_schema>
-
+${sampleDataContext}
 You are a Senior QA Automation Engineer.
 We need to test the API endpoint: ${method} ${endpoint}
 
@@ -304,7 +370,7 @@ USER ROLE CONTEXT: The request will be executed by users with these roles: ${rol
 Here is the source code context from the local repository handling this endpoint:
 ${codeContext}
 ${dbContext}
-
+${sampleDataContext}
 The user has requested the following test cases to be generated:
 ${test_cases}
 
@@ -340,7 +406,7 @@ USER ROLE CONTEXT: The request will be executed by users with these roles: ${rol
 Here is the source code context from the local repository handling this endpoint:
 ${codeContext}
 ${dbContext}
-
+${sampleDataContext}
 Analyze the code and determine a default, successful test case:
 ${tracingInstruction}
 CRITICAL VALIDATION INSTRUCTION: Look very carefully for any validation schemas (Joi, Yup, Zod, express-validator, etc.) in the provided code context. 
@@ -529,6 +595,22 @@ router.post('/analyze-failure', async (req, res) => {
         dbContext = `\nHere is the Database Schema for the Staging Database to help you understand the expected data structures:\n`;
         for (const [table, cols] of Object.entries(schema)) {
           dbContext += `- Table '${table}': ${cols.join(', ')}\n`;
+        }
+
+        // ── REAL DATA for failure analysis ──
+        const allTableNames = Object.keys(schema);
+        const referencedTables = extractReferencedTables(codeContext, allTableNames);
+        
+        if (referencedTables.length > 0) {
+          const sampleData = await fetchSampleData(referencedTables, 3);
+          if (Object.keys(sampleData).length > 0) {
+            dbContext += `\n<real_sample_data>\nREAL SAMPLE DATA from the staging database — use these real IDs/values when suggesting fixes:\n`;
+            for (const [table, rows] of Object.entries(sampleData)) {
+              dbContext += `\n--- Table: ${table} (${rows.length} sample rows) ---\n`;
+              dbContext += JSON.stringify(rows, null, 2) + '\n';
+            }
+            dbContext += `</real_sample_data>\n`;
+          }
         }
       } catch (e) {
         // DB not connected, skip silently

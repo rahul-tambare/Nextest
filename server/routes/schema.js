@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { stagingQuery } from '../db.js';
+import { stagingQuery, fetchSampleData } from '../db.js';
 
 const router = Router();
 
@@ -45,4 +45,17 @@ router.get('/tables/:name', async (req, res) => {
   }
 });
 
+// Get sample data from a specific table
+router.get('/tables/:name/sample', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 5;
+    const sampleData = await fetchSampleData([req.params.name], Math.min(limit, 20));
+    const rows = sampleData[req.params.name] || [];
+    res.json({ table: req.params.name, count: rows.length, rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;
+

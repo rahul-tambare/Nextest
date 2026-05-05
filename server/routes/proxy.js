@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getModuleIdForEndpoint } from '../db.js';
+import { getModuleIdForEndpoint, getAllModuleIdsForEndpoint } from '../db.js';
 
 const router = Router();
 
@@ -97,6 +97,19 @@ router.get('/module-id', async (req, res) => {
     
     const moduleId = await getModuleIdForEndpoint(endpoint);
     res.json({ moduleId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get ALL module-ids for an endpoint (for user to pick)
+router.get('/module-ids', async (req, res) => {
+  try {
+    const { endpoint } = req.query;
+    if (!endpoint) return res.status(400).json({ error: 'Endpoint query param required' });
+    
+    const modules = await getAllModuleIdsForEndpoint(endpoint);
+    res.json({ modules });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

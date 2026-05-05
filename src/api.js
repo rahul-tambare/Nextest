@@ -86,6 +86,7 @@ const api = {
   // Schema introspection
   getSchemaTables: () => request('/schema/tables'),
   getSchemaTable: (name) => request(`/schema/tables/${name}`),
+  getTableSampleData: (name, limit = 5) => request(`/schema/tables/${name}/sample?limit=${limit}`),
 
   // Staging proxy — #15 with timeout
   proxyRequest: ({ method, url, headers, body, token, timeout }) =>

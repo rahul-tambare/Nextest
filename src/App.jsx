@@ -92,7 +92,7 @@ function HealthIndicator() {
 }
 
 function Header() {
-  const { state, toggleSidebar } = useStore();
+  const { state, toggleSidebar, toggleTheme } = useStore();
   const location = useLocation();
   const title = PAGE_TITLES[location.pathname] || 'Nextest';
   const tokenClass = state.tokenStatus === 'valid' ? 'token-badge--valid'
@@ -114,7 +114,10 @@ function Header() {
         </button>
         <h1 className="page-title">{title}</h1>
       </div>
-      <div className="header-right">
+      <div className="header-right" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }}>
+        <button className="btn btn-ghost btn-icon" onClick={toggleTheme} aria-label="Toggle theme" style={{ fontSize: '1.25rem' }}>
+          {state.theme === 'dark' ? '☀️' : '🌙'}
+        </button>
         <div className={`token-badge ${tokenClass}`}>
           <span className="token-badge-dot" />
           <span>{tokenText}</span>
@@ -125,7 +128,11 @@ function Header() {
 }
 
 function AppShell() {
-  const { setHealth } = useStore();
+  const { state, setHealth } = useStore();
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', state.theme);
+  }, [state.theme]);
 
   useEffect(() => {
     api.health()
